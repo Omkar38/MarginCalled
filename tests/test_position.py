@@ -202,14 +202,42 @@ def test_capping_note_is_always_present():
 # --------------------------------------------------------------------------
 
 
-def test_commissions_scale_with_leg_count():
-    two = build_position(
-        _realistic_candidate(), PositionConfig(structure=Structure.TWO_LEG)
+def test_default_cost_is_zero_matching_alpaca_paper():
+    """The contest scores a commission-free paper account, so the default is 0."""
+    from tp2agent.position import COMMISSION_PER_CONTRACT_SIDE
+
+    assert COMMISSION_PER_CONTRACT_SIDE == 0.0
+    spec = build_position(
+        _realistic_candidate(), PositionConfig(structure=Structure.FOUR_LEG)
     )
-    four = build_position(_candidate(), PositionConfig(structure=Structure.FOUR_LEG))
+    assert spec.commissions_round_trip == 0.0
+    assert spec.max_loss_with_commissions == spec.max_loss
+
+
+def test_commissions_scale_with_leg_count_when_charged():
+    from tp2agent.position import COMMISSION_IBKR_LITE
+
+    cfg2 = PositionConfig(
+        structure=Structure.TWO_LEG, commission_per_contract_side=COMMISSION_IBKR_LITE
+    )
+    cfg4 = PositionConfig(
+        structure=Structure.FOUR_LEG, commission_per_contract_side=COMMISSION_IBKR_LITE
+    )
+    two = build_position(_realistic_candidate(), cfg2)
+    four = build_position(_candidate(), cfg4)
     assert abs(two.commissions_round_trip - 2 * 2 * 0.65) < 1e-9
     assert abs(four.commissions_round_trip - 4 * 2 * 0.65) < 1e-9
     assert four.max_loss_with_commissions > four.max_loss
+
+
+def test_alpaca_regulatory_rate_is_an_order_of_magnitude_below_ibkr():
+    """The source study's $0.65/side is ~13x Alpaca's live regulatory cost."""
+    from tp2agent.position import (
+        COMMISSION_ALPACA_REGULATORY,
+        COMMISSION_IBKR_LITE,
+    )
+
+    assert COMMISSION_IBKR_LITE / COMMISSION_ALPACA_REGULATORY > 10
 
 
 # --------------------------------------------------------------------------

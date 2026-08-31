@@ -54,7 +54,26 @@ __all__ = [
 ]
 
 CONTRACT_MULTIPLIER = 100.0
-COMMISSION_PER_CONTRACT_SIDE = 0.65
+
+# Transaction cost per contract, per side. Three conventions, kept explicit
+# because the choice materially changes the economics.
+#
+#   ALPACA_PAPER        What the competition actually scores. Alpaca is
+#                       commission-free on US-listed options through the API,
+#                       and paper trading simulates no fees at all.
+#   ALPACA_REGULATORY   What live Alpaca would cost: ORF $0.02295 + OCC $0.025
+#                       + TAF $0.00329 on sells. Not charged in paper, but this
+#                       is the honest figure for any live-deployability claim.
+#   IBKR_LITE           $0.65/side, i.e. $1.30 per contract per leg round trip.
+#                       The convention used in the source study, retained so its
+#                       results can be reproduced for comparison.
+COMMISSION_ALPACA_PAPER = 0.0
+COMMISSION_ALPACA_REGULATORY = 0.0483
+COMMISSION_IBKR_LITE = 0.65
+
+# Default to what the contest scores. Anything claiming live economics should
+# pass COMMISSION_ALPACA_REGULATORY explicitly and say so.
+COMMISSION_PER_CONTRACT_SIDE = COMMISSION_ALPACA_PAPER
 
 
 class Structure(str, Enum):

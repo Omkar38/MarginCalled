@@ -248,11 +248,34 @@ def test_aggregate_cap_blocks():
 
 
 def test_sizing_uses_max_loss_including_commissions():
-    spec = _spec()
+    """When costs are charged, the sizing cap must count them.
+
+    The default is zero (Alpaca is commission-free and paper simulates no fees),
+    so this charges the source study's IBKR rate explicitly to verify the cap
+    responds to costs rather than ignoring them.
+    """
+    from tp2agent.position import COMMISSION_IBKR_LITE
+
+    cfg = PositionConfig(
+        structure=Structure.FOUR_LEG,
+        commission_per_contract_side=COMMISSION_IBKR_LITE,
+    )
+    spec = build_position(_realistic_candidate(), cfg)
     assert spec.max_loss_with_commissions > spec.max_loss
-    cap_pct = (spec.max_loss + 0.01) / 100_000.0  # between the two figures
-    d = _evaluate(limits=_limits(max_loss_per_trade_pct=cap_pct, max_aggregate_loss_pct=0.05))
+
+    # A cap set between the two figures must reject on the cost-inclusive number.
+    cap_pct = (spec.max_loss + 0.01) / 100_000.0
+    d = _evaluate(
+        spec=spec,
+        limits=_limits(max_loss_per_trade_pct=cap_pct, max_aggregate_loss_pct=0.05),
+    )
     assert RejectCode.MAX_LOSS_PER_TRADE in _codes(d), "commissions must count"
+
+
+def test_zero_cost_default_does_not_inflate_sizing():
+    spec = _spec()
+    assert spec.commissions_round_trip == 0.0
+    assert spec.max_loss_with_commissions == spec.max_loss
 
 
 def test_insufficient_buying_power_blocks():
