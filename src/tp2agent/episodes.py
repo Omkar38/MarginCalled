@@ -63,7 +63,13 @@ def episode_id(underlying: str, cand: RectangleCandidate) -> str:
 
 @dataclass
 class Measurement:
-    """One re-pricing of a tracked rectangle."""
+    """One re-pricing of a tracked rectangle.
+
+    Individual leg quotes are carried, not just the products. lhs and rhs are
+    A_ask*B_ask and C_bid*D_bid, and the per-leg prices cannot be recovered from
+    them - so without these fields an exit price is unrecoverable and no P&L can
+    be computed from entry to reversion.
+    """
 
     observable: bool
     lhs: float = 0.0
@@ -71,6 +77,12 @@ class Measurement:
     severity: float = 0.0  # (rhs - lhs) / rhs; positive means violating
     violation_size: float = 0.0
     missing: tuple[str, ...] = ()
+    quotes: dict[str, tuple[float, float]] = field(default_factory=dict)
+
+    def leg(self, label: str, side: int) -> float:
+        """Bid (side=0) or ask (side=1) for leg A/B/C/D; nan when unobserved."""
+        pair = self.quotes.get(label)
+        return pair[side] if pair else float("nan")
 
     @property
     def violating(self) -> bool:
@@ -95,16 +107,21 @@ def remeasure(chain: ChainSnapshot, ep: "Episode") -> Measurement:
         return Measurement(observable=False, missing=missing)
 
     A, B, C, D = (legs[k][0] for k in "ABCD")
+    quotes = {
+        label: (opt.quote.bid, opt.quote.ask)
+        for label, opt in zip("ABCD", (A, B, C, D))
+    }
     lhs = A.quote.ask * B.quote.ask
     rhs = C.quote.bid * D.quote.bid
     if rhs <= 0:
-        return Measurement(observable=False, missing=("rhs<=0",))
+        return Measurement(observable=False, missing=("rhs<=0",), quotes=quotes)
     return Measurement(
         observable=True,
         lhs=lhs,
         rhs=rhs,
         severity=(rhs - lhs) / rhs,
         violation_size=rhs - lhs,
+        quotes=quotes,
     )
 
 
@@ -212,6 +229,10 @@ EPISODE_FIELDS = [
 PATH_FIELDS = [
     "episode_id", "ts", "event_index", "observable", "violating",
     "severity", "violation_size", "lhs", "rhs", "missing_legs",
+    # Per-leg quotes at every observation. Required to compute an exit price:
+    # lhs and rhs are products and the individual legs cannot be recovered
+    # from them, so without these a backtest has entry prices and no exits.
+    "A_bid", "A_ask", "B_bid", "B_ask", "C_bid", "C_ask", "D_bid", "D_ask",
 ]
 
 
@@ -286,6 +307,11 @@ class EpisodeTracker:
                     f"{m.severity:.6f}", f"{m.violation_size:.6f}",
                     f"{m.lhs:.6f}", f"{m.rhs:.6f}",
                     "|".join(m.missing),
+                    *[
+                        f"{m.leg(lbl, side):.6f}"
+                        for lbl in "ABCD"
+                        for side in (0, 1)
+                    ],
                 ]
             )
         self._event_index[ep_id] = idx + 1
@@ -360,7 +386,15 @@ class EpisodeTracker:
 
             self._append_path(
                 ep_id, ts,
-                Measurement(True, cand.lhs, cand.rhs, severity, cand.violation_size),
+                Measurement(
+                    True, cand.lhs, cand.rhs, severity, cand.violation_size,
+                    quotes={
+                        lbl: (leg.quote.bid, leg.quote.ask)
+                        for lbl, leg in zip(
+                            "ABCD", (cand.A, cand.B, cand.C, cand.D)
+                        )
+                    },
+                ),
             )
 
         # 2. Re-price every active episode that did NOT appear this scan.

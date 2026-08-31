@@ -1,0 +1,8 @@
+# The MCP server runs as a separate process; the tp2agent package itself has no
+# third-party dependencies and never imports these.
+#
+# Versions are pinned because alpaca-mcp-server 2.3.0 is broken against every
+# available fastmcp: its security module imports fastmcp.tools.tool, which does
+# not exist in fastmcp 3.x or 4.x (fastmcp.tools ships base, function_parsing,
+# function_tool only). 2.2.1 imports and runs correctly.
+alpaca-mcp-server==2.2.1

@@ -197,6 +197,52 @@ def test_episode_file_is_rewritten_with_state():
         assert float(rows[0]["duration_seconds"]) == 300
 
 
+def test_path_records_per_leg_quotes_at_every_observation():
+    """Exit prices must be recoverable, not just the products.
+
+    lhs and rhs are A_ask*B_ask and C_bid*D_bid; the individual legs cannot be
+    recovered from them. Without per-leg quotes at reversion a backtest has
+    entry prices and no exit, so no P&L can be computed.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        tr = _tracker(tmp)
+        chain = _clean_chain()
+        cand = _cand(0.05)
+        tr.observe(T0, chain, [cand], {})                      # entry
+        tr.observe(T0 + timedelta(minutes=5), chain, [], {})   # re-priced, no longer violating
+
+        rows = list(csv.DictReader((tmp / "episode_path.csv").open()))
+        assert len(rows) == 2
+        for row in rows:
+            for lbl in "ABCD":
+                for side in ("bid", "ask"):
+                    val = float(row[f"{lbl}_{side}"])
+                    assert val == val, f"{lbl}_{side} is nan"
+                    assert val > 0, f"{lbl}_{side} not positive"
+
+        # Entry row must match the candidate's own quotes.
+        assert abs(float(rows[0]["A_ask"]) - cand.A.quote.ask) < 1e-5
+        assert abs(float(rows[0]["D_bid"]) - cand.D.quote.bid) < 1e-5
+        # Exit row is a fresh re-pricing of the same four contracts.
+        exit_c = chain.calls[cand.T2][cand.K1_adj].quote.bid
+        assert abs(float(rows[1]["C_bid"]) - exit_c) < 1e-5
+
+
+def test_missing_legs_have_no_quotes_but_still_log():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        tr = _tracker(tmp)
+        chain = _clean_chain()
+        tr.observe(T0, chain, [_cand(0.05)], {})
+        ep = next(iter(tr.episodes.values()))
+        del chain.calls[ep.T1][ep.K1]
+        tr.observe(T0 + timedelta(minutes=5), chain, [], {})
+        rows = list(csv.DictReader((tmp / "episode_path.csv").open()))
+        assert int(rows[1]["observable"]) == 0
+        assert "A" in rows[1]["missing_legs"]
+
+
 def test_state_survives_restart():
     """A restarted tracker must reload episodes, not erase them.
 
