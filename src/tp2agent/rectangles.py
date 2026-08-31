@@ -49,6 +49,8 @@ from datetime import date
 from typing import Iterable, Sequence
 
 __all__ = [
+    "TradabilityFlags",
+    "tradability_flags",
     "vertical_arbitrage_free",
     "Quote",
     "OptionQuote",
@@ -141,29 +143,45 @@ class ChainSnapshot:
 
 @dataclass(frozen=True)
 class RectangleConfig:
-    """Screens applied while building. Every threshold is logged, not implicit."""
+    """Screens applied while building.
 
-    # Quote quality
+    DETECTION and EXECUTION are deliberately separated. This config governs
+    detection only, and its defaults reproduce what the two source papers
+    actually specify: loop every (K1,T1),(K2,T2) with T1 < T2 and
+    K1/F_T1 < K2/F_T2, forward-adjust and round the strikes up, discard pairs
+    whose rounded strike sits in an illiquid region, screen out unusable quotes,
+    and test the inequality.
+
+    Anything asking "can this be traded cleanly?" - the coverage ratio, a price
+    floor, a narrow moneyness band - is an execution question, not a detection
+    one. A rectangle that violates TP2 but cannot be executed is still a
+    violation and must be recorded as one; tradability is annotated downstream
+    by `tradability_flags`, never used to suppress a detection.
+
+    Putting execution screens here previously removed 20,000 of 80,000 SPY
+    rectangles and took detections from 409 to 0.
+    """
+
+    # Quote quality - the papers' "removing illiquid options"
     max_relative_spread: float = 0.50
     min_size: float = 1.0
-    # Below this mid, half a tick is a large fraction of the price and the
-    # four-way product carries error of the same order as any real signal. These
-    # are also the contracts where the source study found costs dominate: its
-    # median gross entry exposure was $7-11 across two legs.
-    min_leg_mid: float = 0.50
 
-    # Universe
-    min_moneyness: float = 0.90  # K / F bounds
-    max_moneyness: float = 1.10
-    max_strike_gap_pct: float = 0.06  # (K2 - K1) / F
+    # Universe. Wide by default: the papers impose no moneyness band and no
+    # strike-gap cap. Narrow these only to deliberately scope a scan.
+    min_moneyness: float = 0.50
+    max_moneyness: float = 1.50
+    max_strike_gap_pct: float = 1.0
 
-    # Detection
-    violation_buffer_pct: float = 0.02  # of C^b D^b, on top of the tick bound
+    # Detection precision. The tick bound is computed per rectangle and is the
+    # principled part; the extra buffer defaults to zero so the threshold is not
+    # doubly conservative.
+    violation_buffer_pct: float = 0.0
     tick: float = DEFAULT_TICK
 
-    # Coverage (Finding 1): reject wide-gap rectangles where the forced 1:1 cap
-    # would badly distort the intended position.
-    max_coverage_ratio: float = 1.25
+    # Execution-side thresholds, retained here only so a caller can opt in to a
+    # narrower scan. Both default to "off" for detection.
+    min_leg_mid: float = 0.0
+    max_coverage_ratio: float = 1e9
 
     # Rounding proximity. Glasserman, Li & Pirjol (2025) sec. 4.1: "if no strike
     # is traded within $50 of the rounded-up strike, we discard this option as it
@@ -346,6 +364,55 @@ def vertical_arbitrage_free(
     width = high.strike - low.strike
     credit = low.quote.bid - high.quote.ask
     return credit <= width + tol
+
+
+@dataclass(frozen=True)
+class TradabilityFlags:
+    """Whether a detected violation could actually be executed.
+
+    Computed after detection and recorded alongside it. A rectangle failing any
+    of these is still a genuine TP2 violation - it simply cannot be traded on
+    the terms available, which is a separate fact and is stored as one.
+    """
+
+    coverage_ratio: float
+    min_leg_mid: float
+    coverage_ok: bool
+    legs_priced_ok: bool
+    tick_noise_ok: bool
+
+    @property
+    def tradable(self) -> bool:
+        return self.coverage_ok and self.legs_priced_ok and self.tick_noise_ok
+
+    @property
+    def reasons(self) -> tuple[str, ...]:
+        out = []
+        if not self.coverage_ok:
+            out.append(f"coverage_ratio {self.coverage_ratio:.3f} too wide")
+        if not self.legs_priced_ok:
+            out.append(f"cheapest leg ${self.min_leg_mid:.2f}")
+        if not self.tick_noise_ok:
+            out.append("violation within tick noise")
+        return tuple(out)
+
+
+def tradability_flags(
+    cand: "RectangleCandidate",
+    max_coverage_ratio: float = 1.25,
+    min_leg_mid: float = 0.50,
+    noise_multiple: float = 1.0,
+) -> TradabilityFlags:
+    """Execution-side assessment of an already-detected violation."""
+    mids = [leg.quote.mid for leg in (cand.A, cand.B, cand.C, cand.D)]
+    cheapest = min(mids)
+    return TradabilityFlags(
+        coverage_ratio=cand.coverage_ratio,
+        min_leg_mid=cheapest,
+        coverage_ok=cand.coverage_ratio <= max_coverage_ratio,
+        legs_priced_ok=cheapest >= min_leg_mid,
+        tick_noise_ok=cand.violation_size > noise_multiple * cand.tick_bound * cand.rhs,
+    )
 
 
 def build_rectangles(

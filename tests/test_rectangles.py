@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from tp2agent.rectangles import (  # noqa: E402
+    tradability_flags,
     vertical_arbitrage_free,
     ChainSnapshot,
     OptionQuote,
@@ -225,8 +226,8 @@ def test_census_accounts_for_every_rectangle():
     assert dropped == census["rectangles_considered"], census
 
 
-def test_wide_coverage_ratio_is_screened():
-    """price(C)/price(B) far from 1 means the forced 1:1 cap badly distorts."""
+def test_wide_coverage_ratio_is_screened_when_opted_in():
+    """The coverage screen still works when a caller deliberately narrows a scan."""
     chain = _clean_chain()
     strict = RectangleConfig(max_coverage_ratio=1.01)
     loose = RectangleConfig(max_coverage_ratio=99.0)
@@ -288,14 +289,45 @@ def test_chain_counts_settlement_collisions():
     assert chain.collisions == before + 1
 
 
-def test_penny_legs_are_excluded():
-    """Sub-$0.50 legs make the four-way product quantisation-dominated."""
+def test_penny_legs_are_detected_but_flagged_untradable():
+    """Cheap legs no longer suppress DETECTION - they fail tradability instead.
+
+    A rectangle that violates TP2 is a violation whether or not it can be traded.
+    Suppressing it at detection destroyed the measurement; the price floor now
+    lives in tradability_flags, where it belongs.
+    """
     chain = _clean_chain()
     for k, opt in list(chain.calls[T1].items()):
         chain.calls[T1][k] = OptionQuote(opt.symbol, k, T1, "C", _q(0.05, 0.07))
     found, census = build_rectangles(chain, R)
-    assert census["leg_too_cheap"] > 0, census
-    assert found == []
+    assert census["leg_too_cheap"] == 0, "detection must not apply a price floor"
+    for cand in found:
+        flags = tradability_flags(cand)
+        assert not flags.legs_priced_ok
+        assert not flags.tradable
+        assert any("cheapest leg" in r for r in flags.reasons)
+
+
+def test_detection_defaults_match_the_papers():
+    """Defaults must impose no execution-side screen."""
+    cfg = RectangleConfig()
+    assert cfg.min_leg_mid == 0.0
+    assert cfg.max_coverage_ratio >= 1e8
+    assert cfg.violation_buffer_pct == 0.0
+    assert cfg.min_moneyness <= 0.5 and cfg.max_moneyness >= 1.5
+    assert cfg.max_strike_gap_pct >= 1.0
+
+
+def test_tradability_is_reported_not_enforced():
+    """A wide-coverage rectangle is still detected, just flagged untradable."""
+    chain = _clean_chain()
+    opt = chain.calls[T1][635.0]
+    chain.calls[T1][635.0] = OptionQuote(opt.symbol, 635.0, T1, "C", _q(1.00, 1.05))
+    found, _ = build_rectangles(chain, R)
+    assert found, "detection should still fire"
+    flagged = [tradability_flags(c, max_coverage_ratio=1.0001) for c in found]
+    assert any(not f.coverage_ok for f in flagged)
+    assert all(isinstance(f.tradable, bool) for f in flagged)
 
 
 def test_no_detection_reuses_a_contract():
