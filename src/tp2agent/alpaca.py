@@ -21,7 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from .rectangles import ChainSnapshot, OptionQuote, Quote
 
@@ -251,6 +251,62 @@ class AlpacaDataClient:
             if not token:
                 break
         return sorted(seen)
+
+    def dividends(
+        self, symbol: str, start: date, end: date
+    ) -> list[tuple[date, float, date]]:
+        """Announced cash dividends: (ex_date, amount, announced_on).
+
+        Sourced from Alpaca's corporate-actions endpoint, which is authoritative
+        for what is actually declared. `announced_on` is approximated by the
+        process date when present; absent that, the ex-date is used, which is the
+        conservative choice since it cannot make an amount look known earlier
+        than it was.
+        """
+        status, data = self._get(
+            f"{DATA_HOST}/v1/corporate-actions",
+            {
+                "symbols": symbol,
+                "types": "cash_dividend",
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "limit": 100,
+            },
+        )
+        if status != 200:
+            raise AlpacaError(f"corporate actions failed ({status}): {str(data)[:200]}")
+        out: list[tuple[date, float, date]] = []
+        for row in (data.get("corporate_actions") or {}).get("cash_dividends", []):
+            try:
+                ex = datetime.strptime(row["ex_date"], "%Y-%m-%d").date()
+                rate = float(row["rate"])
+            except (KeyError, ValueError):
+                continue
+            declared_raw = row.get("process_date") or row.get("ex_date")
+            try:
+                declared = datetime.strptime(declared_raw, "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                declared = ex
+            out.append((ex, rate, declared))
+        return sorted(out)
+
+    def dividend_horizon(
+        self, symbol: str, as_of: date, quarterly_days: int = 95
+    ) -> tuple[date, list[tuple[date, float, date]]]:
+        """How far ahead the dividend picture is actually known.
+
+        Returns the last date for which the absence of a distribution can be
+        asserted, plus the announced dividends. SPY pays quarterly, so beyond
+        roughly one quarter past the last announced ex-date an undeclared
+        distribution is near-certain. Rectangles whose far leg extends past that
+        horizon must not be certified European-equivalent on the grounds that no
+        dividend is *listed* - the dividend simply has not been declared yet.
+        """
+        divs = self.dividends(symbol, as_of.replace(year=as_of.year - 1), as_of.replace(year=as_of.year + 1))
+        past = [d for d in divs if d[0] <= as_of]
+        if not past:
+            return as_of, divs
+        return past[-1][0] + timedelta(days=quarterly_days), divs
 
     def discover_quoted_expiries(
         self,

@@ -81,6 +81,37 @@ def test_dividend_on_or_before_signal_is_ignored():
     assert res.category is Category.NO_DISTRIBUTION
 
 
+def test_horizon_blocks_certifying_an_undeclared_dividend():
+    """An empty dividend list is not evidence of no dividend.
+
+    SPY pays quarterly and declares shortly before the ex-date, so a far leg
+    beyond the last announced ex-date plus a quarter spans a distribution that
+    exists but is not yet listed. Certifying it NO_DISTRIBUTION would be wrong.
+    """
+    rect = _rect(date(2026, 10, 16), date(2026, 12, 18))
+    horizon = date(2026, 9, 21)
+    res = classify(rect, [], r=0.045, certain_through=horizon)
+    assert res.category is Category.UNRESOLVED
+    assert not res.is_tradable
+    assert any("dividend horizon" in reason for reason in res.reasons)
+
+
+def test_within_horizon_still_certifies():
+    rect = _rect(date(2026, 9, 11), date(2026, 9, 18))
+    res = classify(rect, [], r=0.045, certain_through=date(2026, 9, 21))
+    assert res.category is Category.NO_DISTRIBUTION
+    assert res.is_tradable
+
+
+def test_horizon_ignored_when_a_dividend_is_announced():
+    """With a declared dividend in the window the normal cascade applies."""
+    rect = _rect(date(2026, 10, 16), date(2026, 12, 18))
+    divs = [Dividend(date(2026, 9, 18), 1.90)]
+    res = classify(rect, divs, r=0.045, certain_through=date(2026, 9, 21))
+    assert res.category is not Category.NO_DISTRIBUTION
+    assert res.dividends_used
+
+
 # --------------------------------------------------------------------------
 # Proposition 2.1(ii): the published break-even horizons
 # --------------------------------------------------------------------------

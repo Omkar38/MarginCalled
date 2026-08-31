@@ -289,6 +289,7 @@ def classify(
     dividends: Sequence[Dividend],
     r: float,
     violation_size: float | None = None,
+    certain_through: date | None = None,
 ) -> GateResult:
     """Classify a rectangle into one of the four theory categories.
 
@@ -308,6 +309,20 @@ def classify(
 
     usable = _usable_dividends(dividends, rect.signal_date, rect.T2)
     result.dividends_used = usable
+
+    # An empty dividend list is not evidence of no dividend - it may only mean
+    # the next one has not been declared yet. SPY pays quarterly, so beyond about
+    # a quarter past the last announced ex-date an undeclared distribution is
+    # near-certain. Certifying such a rectangle European-equivalent on the
+    # grounds that none is *listed* would be wrong, so it is left unresolved.
+    if certain_through is not None and rect.T2 > certain_through and not usable:
+        result.category = Category.UNRESOLVED
+        result.reasons.append(
+            f"T2 {rect.T2.isoformat()} extends past the dividend horizon "
+            f"{certain_through.isoformat()}; no distribution is announced that far "
+            f"out, but one is expected, so absence cannot be asserted."
+        )
+        return result
 
     discarded = [
         d

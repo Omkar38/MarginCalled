@@ -53,12 +53,10 @@ from tp2agent.theory_gate import (  # noqa: E402
 # the American reduction and one not.
 EUROPEAN_UNDERLYINGS = {"SPX", "SPXW", "XSP", "VIX", "VIXW", "DJX", "NDX", "RUT"}
 
-# Cash distributions apply only to the ETF. UNVERIFIED — confirm the announced SPY
-# September ex-date and amount; a wrong ex-date silently changes every American
-# classification.
-DIVIDENDS: dict[str, list[Dividend]] = {
-    "SPY": [Dividend(date(2026, 9, 18), 1.80)],
-}
+# Cash distributions apply only to the ETF; index options have none. Dividends are
+# fetched live from Alpaca's corporate-actions endpoint rather than hardcoded, and
+# a horizon is computed beyond which the absence of an undeclared distribution
+# cannot be asserted.
 SHORT_RATE = 0.045
 
 _stop = False
@@ -94,11 +92,12 @@ def scan_once(
     underlying: str,
     expiries: list[date],
     tracker: EpisodeTracker | None = None,
+    dividends: list[Dividend] | None = None,
+    certain_through: date | None = None,
 ) -> dict:
     started = time.monotonic()
     ts = datetime.now()
     is_european = underlying.upper() in EUROPEAN_UNDERLYINGS
-    dividends = DIVIDENDS.get(underlying.upper(), [])
 
     feed = client.resolve_feed(underlying)
     spot, spot_src = client.resolve_spot(underlying, expiries[0], feed.feed, SHORT_RATE)
@@ -124,7 +123,13 @@ def scan_once(
         gate = (
             classify_european(rect)
             if is_european
-            else classify(rect, dividends, SHORT_RATE, violation_size=cand.violation_size)
+            else classify(
+                rect,
+                dividends or [],
+                SHORT_RATE,
+                violation_size=cand.violation_size,
+                certain_through=certain_through,
+            )
         )
         categories[episode_id(underlying, cand)] = gate.category.value
         flags = tradability_flags(cand)
@@ -210,6 +215,18 @@ def main() -> int:
         return 1
     print(f"expiries   : {', '.join(e.isoformat() for e in expiries)}")
 
+    dividends: list[Dividend] = []
+    certain_through = None
+    if not is_european:
+        try:
+            certain_through, raw = client.dividend_horizon(underlying, date.today())
+            dividends = [Dividend(ex, rate) for ex, rate, _ in raw]
+            print(f"dividends  : {len(dividends)} announced; "
+                  f"absence assertable through {certain_through.isoformat()}")
+        except AlpacaError as exc:
+            print(f"dividends  : lookup failed ({exc}); rectangles spanning an "
+                  f"undeclared distribution will be left unresolved")
+
     store = ScanStore(data_dir)
     tracker = EpisodeTracker(data_dir, underlying)
     cfg = RectangleConfig(
@@ -225,7 +242,10 @@ def main() -> int:
             print(f"  {now.strftime('%H:%M:%S')}  outside market hours, sleeping")
         else:
             try:
-                scan_once(client, store, cfg, underlying, expiries, tracker)
+                scan_once(
+                    client, store, cfg, underlying, expiries, tracker,
+                    dividends, certain_through,
+                )
                 scans += 1
             except AlpacaError as exc:
                 print(f"  {now.strftime('%H:%M:%S')}  scan failed: {exc}")
