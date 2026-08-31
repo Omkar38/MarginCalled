@@ -1,0 +1,21 @@
+# Secrets — NEVER commit. The competition repo is public.
+.env
+.env.*
+!.env.example
+*.pem
+*credentials*
+*secret*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Runtime artefacts
+audit/
+logs/
+*.log
+snapshots/
