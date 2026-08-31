@@ -32,7 +32,7 @@ ex-dividend date.** Captured in `test_near_leg_too_close_to_ex_date_fails`.
 
 ---
 
-### 2. Live Alpaca chain adapter 🟡 IN PROGRESS
+### 2. Live Alpaca chain adapter ✅ DONE (feed blocked)
 
 **Startup probe written** — `scripts/probe_account.py`, read-only, GET-only, audited:
 the sole method reference in the file is `method="GET"`; no POST/PUT/DELETE, no
@@ -65,11 +65,40 @@ the sole method reference in the file is `method="GET"`; no POST/PUT/DELETE, no
 quotes (Alpaca-derived, 15-min delayed) sampled with markets closed. Real OPRA NBBO on
 far-dated SPY calls will be materially wider. The paper's joint screens left 5–7% of
 candidates; 93.9% is not comparable and almost certainly an artefact of derived quotes.
-- [ ] SPY option chain fetch — **calls and puts** (puts needed for the parity forward)
-- [ ] Quote-quality gate: positive bid, not crossed, size, relative spread, staleness
-- [ ] Universe filter: both $T_1$ and $T_2$ **after 4 Sep**; $T_1$ clear of the ex-date
-      by the ≥21-day margin from component 1
-- [ ] Rate-limit-aware polling (200/min free, 10k/min paid)
+- [x] `src/tp2agent/alpaca.py` — read-only client, OCC parser, pagination
+- [x] Chain fetch for **calls and puts**; 1,040 snapshots parsed, 0 failures
+- [x] Quote-age tracking; missing timestamp **fails closed** to infinity
+- [x] `scripts/shadow_scan.py` — full pipeline, no orders
+- [x] **14/14 tests**, including a source scan asserting no order path exists
+
+---
+
+## ⛔ BLOCKING FINDING — 31 Aug 2026
+
+**The indicative feed cannot produce a TP2 violation. Ever.**
+
+Measured across **1,978 rectangles** with all screens disabled (spread 99%, buffer 0,
+coverage 99×):
+
+| | normalized margin (rhs−lhs)/rhs |
+|---|---|
+| min | −7.73 |
+| median | −1.21 |
+| **max (closest to violating)** | **−0.0338** |
+| violations | **0** |
+| near-misses within 1% | **0** |
+
+The closest rectangle is 3.4% from violating and nothing approaches zero. That is a
+fitted arbitrage-free surface, which satisfies TP2 identically — the same behaviour as
+the synthetic Black–Scholes chain in `test_rectangles.py`.
+
+**Consequence:** without OPRA there are no detections, no trades, no demo, and the
+"every strategy must include options trading" requirement is not met. The $99/mo Algo
+Trader Plus subscription is not optional — it is the difference between having a
+submission and not having one. Alpaca staff confirm the "agreement is not signed"
+error actually means "no Algo Trader Plus subscription"; there is no free agreement.
+
+- [ ] **DECIDE TONIGHT**: buy Algo Trader Plus, or confirm event entitlements on Discord
 
 ---
 

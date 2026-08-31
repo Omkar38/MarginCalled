@@ -49,6 +49,7 @@ from datetime import date
 from typing import Iterable, Sequence
 
 __all__ = [
+    "vertical_arbitrage_free",
     "Quote",
     "OptionQuote",
     "ChainSnapshot",
@@ -131,6 +132,11 @@ class RectangleConfig:
     # Quote quality
     max_relative_spread: float = 0.50
     min_size: float = 1.0
+    # Below this mid, half a tick is a large fraction of the price and the
+    # four-way product carries error of the same order as any real signal. These
+    # are also the contracts where the source study found costs dominate: its
+    # median gross entry exposure was $7-11 across two legs.
+    min_leg_mid: float = 0.50
 
     # Universe
     min_moneyness: float = 0.90  # K / F bounds
@@ -269,22 +275,63 @@ def round_up_to_listed(target: float, listed: Sequence[float]) -> float | None:
 
 
 def tick_error_bound(quotes: Iterable[Quote], tick: float = DEFAULT_TICK) -> float:
-    """Relative error in a product of quoted prices from tick quantisation.
+    """Worst-case relative error in a product of quoted prices from quantisation.
 
-    Each quoted price carries up to half a tick of error. For a product, relative
-    errors add to first order, so the bound is the sum of (tick/2)/price over the
-    legs. On cheap near-expiry contracts this is large, which is exactly where a
-    naive determinant test invents violations.
+    Each quoted price carries up to half a tick of error. The product's worst-case
+    relative deviation is therefore
+
+        prod(1 + h/p_i) - 1,     h = tick/2,
+
+    taken exactly rather than by the first-order sum(h/p_i). The two agree to
+    first order, but the sum *under*-states the true worst case (by ~0.75% on
+    dollar-priced legs, more as legs get cheaper), and a bound used to reject
+    marginal detections must err high, never low. The exact form is superadditive
+    in the number of legs, which is the correct behaviour.
+
+    On cheap near-expiry contracts this is large - exactly where a naive
+    determinant test invents violations out of rounding.
     """
-    total = 0.0
+    factor = 1.0
+    half = 0.5 * tick
     for q in quotes:
         price = max(q.mid, tick)
-        total += (0.5 * tick) / price
-    return total
+        factor *= 1.0 + half / price
+    return factor - 1.0
+
+
+def vertical_arbitrage_free(
+    low: OptionQuote, high: OptionQuote, tol: float = 1e-9
+) -> bool:
+    """Do two same-expiry calls respect the vertical no-arbitrage bound?
+
+    For calls at a shared maturity with K_low < K_high,
+
+        C(K_low) - C(K_high) <= K_high - K_low,
+
+    since the spread can never be worth more than its width. Measured on the sides
+    a trade would actually cross, the credit collected by selling the low strike
+    and buying the high one must not exceed the width:
+
+        bid(K_low) - ask(K_high) <= K_high - K_low.
+
+    A breach is free money on a plain two-leg vertical - simpler, larger, and more
+    certain than any TP2 trade - which means the quotes are broken, not that an
+    opportunity exists. Rectangles containing such a pair must be discarded before
+    the TP2 test, or the determinant merely inherits the inconsistency and reports
+    it as a surface anomaly.
+    """
+    if high.strike < low.strike:
+        low, high = high, low
+    width = high.strike - low.strike
+    credit = low.quote.bid - high.quote.ask
+    return credit <= width + tol
 
 
 def build_rectangles(
-    chain: ChainSnapshot, r: float, cfg: RectangleConfig | None = None
+    chain: ChainSnapshot,
+    r: float,
+    cfg: RectangleConfig | None = None,
+    margins: list[float] | None = None,
 ) -> tuple[list[RectangleCandidate], dict[str, int]]:
     """Build all rectangles from a snapshot and return strong violations.
 
@@ -292,6 +339,12 @@ def build_rectangles(
     The census is the number to watch on a shadow run: it says whether the
     scanner is finding nothing because the market is clean or because a screen is
     mis-set.
+
+    If `margins` is supplied, the normalized TP2 margin (rhs - lhs) / rhs is
+    appended for every rectangle that reaches the violation test, whether or not
+    it violates. A positive value is a violation. The distribution of these is how
+    you tell a clean market from a synthetic one: real quotes produce near-zero
+    margins, a fitted arbitrage-free surface never does.
     """
     cfg = cfg or RectangleConfig()
     census: dict[str, int] = {
@@ -303,6 +356,9 @@ def build_rectangles(
         "leg_unusable": 0,
         "strike_gap_too_wide": 0,
         "coverage_ratio_too_wide": 0,
+        "leg_too_cheap": 0,
+        "degenerate_legs": 0,
+        "vertical_arbitrage": 0,
         "no_violation": 0,
         "below_tick_bound": 0,
         "detected": 0,
@@ -360,7 +416,20 @@ def build_rectangles(
                         census["leg_missing"] += 1
                         continue
 
+                    # The four legs must be four *distinct* contracts. When K2 and
+                    # K1~ (or K1 and K2~) round to the same listed strike at the
+                    # same maturity, B and C collapse into one contract and the
+                    # determinant degenerates into comparing a contract against its
+                    # own spread - which is not a TP2 test at all.
                     legs = (A, B, C, D)
+                    if len({leg.symbol for leg in legs}) < 4:
+                        census["degenerate_legs"] += 1
+                        continue
+
+                    if any(leg.quote.mid < cfg.min_leg_mid for leg in legs):
+                        census["leg_too_cheap"] += 1
+                        continue
+
                     if not all(leg.quote.is_usable for leg in legs):
                         census["leg_unusable"] += 1
                         continue
@@ -377,6 +446,17 @@ def build_rectangles(
                         census["leg_unusable"] += 1
                         continue
 
+                    # Quotes must respect the vertical bound at each maturity
+                    # before the TP2 determinant means anything. Without this, a
+                    # broken same-expiry pair propagates into the product and is
+                    # reported as a surface anomaly.
+                    if not (
+                        vertical_arbitrage_free(A, D)
+                        and vertical_arbitrage_free(C, B)
+                    ):
+                        census["vertical_arbitrage"] += 1
+                        continue
+
                     # Coverage ratio (Finding 1). C is the dearer leg by
                     # construction; screen before doing more work.
                     coverage = (
@@ -388,6 +468,8 @@ def build_rectangles(
 
                     lhs = A.quote.ask * B.quote.ask
                     rhs = C.quote.bid * D.quote.bid
+                    if margins is not None and rhs > 0:
+                        margins.append((rhs - lhs) / rhs)
                     if rhs <= lhs:
                         census["no_violation"] += 1
                         continue

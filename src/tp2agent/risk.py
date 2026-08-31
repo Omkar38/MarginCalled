@@ -93,6 +93,7 @@ class RiskLimits:
 
     # Which theory categories may trade at all
     tradable_categories: tuple[Category, ...] = (
+        Category.EUROPEAN_NATIVE,
         Category.NO_DISTRIBUTION,
         Category.DIVIDEND_SPANNING,
         Category.DIVIDEND_BOUND,

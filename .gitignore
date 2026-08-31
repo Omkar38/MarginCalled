@@ -19,3 +19,9 @@ audit/
 logs/
 *.log
 snapshots/
+
+# Runtime scan output — regenerable, changes every scan.
+# Snapshot a final copy manually before submission if it's wanted as evidence.
+data/
+reports/
+.DS_Store

@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from tp2agent.rectangles import (  # noqa: E402
+    vertical_arbitrage_free,
     ChainSnapshot,
     OptionQuote,
     Quote,
@@ -139,9 +140,15 @@ def test_tick_bound_is_larger_for_cheap_options():
 
 
 def test_tick_bound_scales_with_leg_count():
+    """Exact bound is superadditive: four legs exceed four times one leg.
+
+    prod(1 + h/p) - 1 > 4(h/p) because the cross terms are positive. The
+    first-order sum would give exact equality and thereby under-state the error.
+    """
     one = tick_error_bound([_q(1.0, 1.02)])
     four = tick_error_bound([_q(1.0, 1.02)] * 4)
-    assert abs(four - 4 * one) < 1e-12
+    assert four > 4 * one, (one, four)
+    assert four < 4.05 * one, "bound should stay close to first order"
 
 
 # --------------------------------------------------------------------------
@@ -207,6 +214,9 @@ def test_census_accounts_for_every_rectangle():
         + census["leg_missing"]
         + census["leg_unusable"]
         + census["coverage_ratio_too_wide"]
+        + census["vertical_arbitrage"]
+        + census["degenerate_legs"]
+        + census["leg_too_cheap"]
         + census["no_violation"]
         + census["below_tick_bound"]
         + census["detected"]
@@ -249,6 +259,67 @@ def test_corrupting_the_whole_expiry_fails_at_the_forward():
     assert census["no_forward"] > 0, census
     assert census["rectangles_considered"] == 0
     assert found == []
+
+
+def test_penny_legs_are_excluded():
+    """Sub-$0.50 legs make the four-way product quantisation-dominated."""
+    chain = _clean_chain()
+    for k, opt in list(chain.calls[T1].items()):
+        chain.calls[T1][k] = OptionQuote(opt.symbol, k, T1, "C", _q(0.05, 0.07))
+    found, census = build_rectangles(chain, R)
+    assert census["leg_too_cheap"] > 0, census
+    assert found == []
+
+
+def test_no_detection_reuses_a_contract():
+    """All four legs must be distinct contracts.
+
+    When K2 and K1~ round to the same listed strike, B and C become the same
+    option and the determinant compares a contract against its own spread. Seen
+    live on near-dated SPY, where adjacent strikes are $1 apart.
+    """
+    chain = _clean_chain()
+    opt = chain.calls[T1][635.0]
+    chain.calls[T1][635.0] = OptionQuote(opt.symbol, 635.0, T1, "C", _q(1.00, 1.05))
+    found, census = build_rectangles(chain, R)
+    assert "degenerate_legs" in census
+    for cand in found:
+        symbols = {cand.A.symbol, cand.B.symbol, cand.C.symbol, cand.D.symbol}
+        assert len(symbols) == 4, f"reused a contract: {symbols}"
+
+
+def test_vertical_bound_accepts_sane_quotes():
+    lo = OptionQuote("lo", 100.0, T1, "C", _q(12.0, 12.2))
+    hi = OptionQuote("hi", 110.0, T1, "C", _q(4.0, 4.2))
+    assert vertical_arbitrage_free(lo, hi)
+    assert vertical_arbitrage_free(hi, lo)  # order must not matter
+
+
+def test_vertical_bound_rejects_free_money():
+    """bid(low) - ask(high) > width is a riskless credit: broken quotes."""
+    lo = OptionQuote("lo", 100.0, T1, "C", _q(30.0, 30.2))
+    hi = OptionQuote("hi", 110.0, T1, "C", _q(4.0, 4.2))
+    assert not vertical_arbitrage_free(lo, hi)
+
+
+def test_vertical_arbitrage_rectangles_are_discarded():
+    """A rectangle whose far legs breach the vertical bound must not be reported.
+
+    Reproduces the SPX indicative-feed case: the T2 pair offered an $18 credit on
+    a $10-wide spread, and the TP2 determinant simply inherited that inconsistency.
+    """
+    chain = _clean_chain()
+    cfg = RectangleConfig()
+    strikes = chain.listed_strikes(T2)
+    k_lo, k_hi = strikes[7], strikes[8]
+    opt = chain.calls[T2][k_lo]
+    inflated = opt.quote.ask + 3 * (k_hi - k_lo)
+    chain.calls[T2][k_lo] = OptionQuote(opt.symbol, k_lo, T2, "C", _q(inflated, inflated + 0.05))
+    found, census = build_rectangles(chain, R, cfg)
+    assert census["vertical_arbitrage"] > 0, census
+    for cand in found:
+        assert vertical_arbitrage_free(cand.C, cand.B)
+        assert vertical_arbitrage_free(cand.A, cand.D)
 
 
 # --------------------------------------------------------------------------

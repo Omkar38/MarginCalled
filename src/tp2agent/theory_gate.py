@@ -39,6 +39,7 @@ from typing import Iterable, Sequence
 
 __all__ = [
     "Category",
+    "classify_european",
     "Dividend",
     "Contract",
     "Rectangle",
@@ -57,6 +58,13 @@ DAYS_PER_YEAR = 365.0
 class Category(str, Enum):
     """Theory categories, in cascade order."""
 
+    # For genuinely European contracts (SPX, XSP, VIX, DJX index options) there is
+    # no early-exercise feature at all, so the premium is zero by definition rather
+    # than by Proposition 2.1. The European TP2 benchmark applies directly and the
+    # American reduction is unnecessary - which is precisely why an index scanner
+    # is a clean control against SPY.
+    EUROPEAN_NATIVE = "european_native"
+
     NO_DISTRIBUTION = "no_distribution"
     DIVIDEND_SPANNING = "dividend_spanning"
     DIVIDEND_BOUND = "dividend_bound"
@@ -65,7 +73,11 @@ class Category(str, Enum):
     @property
     def is_european_equivalent(self) -> bool:
         """True when Proposition 2.1 certifies a zero early-exercise premium."""
-        return self in (Category.NO_DISTRIBUTION, Category.DIVIDEND_SPANNING)
+        return self in (
+            Category.EUROPEAN_NATIVE,
+            Category.NO_DISTRIBUTION,
+            Category.DIVIDEND_SPANNING,
+        )
 
     @property
     def is_tradable(self) -> bool:
@@ -252,6 +264,24 @@ def zero_premium_holds(
             return False  # Early exercise may be optimal at t_i.
 
     return True
+
+
+def classify_european(rect: Rectangle) -> GateResult:
+    """Classify a rectangle on a genuinely European underlying.
+
+    No early-exercise feature exists, so pi = 0 identically and Propositions
+    2.1-2.2 have nothing to do. Returned as its own category rather than folded
+    into NO_DISTRIBUTION so the two cases stay distinguishable in the audit log:
+    one is certified by a theorem, the other by the contract specification.
+    """
+    return GateResult(
+        category=Category.EUROPEAN_NATIVE,
+        reasons=[
+            "European-style contract: no early-exercise feature, so the premium is "
+            "zero by definition and the European TP2 benchmark applies directly."
+        ],
+        per_contract_zero_premium={c.label: True for c in rect.contracts},
+    )
 
 
 def classify(
