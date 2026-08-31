@@ -36,6 +36,7 @@ from tp2agent.rectangles import (  # noqa: E402
     RectangleConfig,
     build_rectangles,
     dedupe_episodes,
+    tradability_flags,
 )
 from tp2agent.store import MarginSummary, ScanStore  # noqa: E402
 from tp2agent.theory_gate import (  # noqa: E402
@@ -117,6 +118,7 @@ def scan_once(
     )
 
     categories: dict[str, str] = {}
+    n_tradable = 0
     for cand in episodes:
         rect = _to_theory_rectangle(cand)
         gate = (
@@ -125,8 +127,11 @@ def scan_once(
             else classify(rect, dividends, SHORT_RATE, violation_size=cand.violation_size)
         )
         categories[episode_id(underlying, cand)] = gate.category.value
+        flags = tradability_flags(cand)
+        if flags.tradable:
+            n_tradable += 1
         store.record_violation(
-            ts, feed.feed, spot, cand, gate.category.value, gate.is_tradable
+            ts, feed.feed, spot, cand, gate.category.value, gate.is_tradable, flags
         )
 
     ep_stats = {}
@@ -143,7 +148,10 @@ def scan_once(
         f"[{duration:.1f}s]"
     )
     if episodes:
-        print(f"      *** {len(episodes)} VIOLATION(S) recorded ***")
+        print(
+            f"      *** {len(episodes)} VIOLATION(S) recorded "
+            f"({n_tradable} executable) ***"
+        )
     if ep_stats and any(ep_stats.values()):
         s = tracker.summary() if tracker else {}
         print(

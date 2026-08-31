@@ -308,6 +308,41 @@ def test_penny_legs_are_detected_but_flagged_untradable():
         assert any("cheapest leg" in r for r in flags.reasons)
 
 
+def test_every_census_bucket_is_persisted():
+    """Every drop bucket must have a column in scans.csv.
+
+    Four buckets were computed but never written, leaving ~15% of considered
+    rectangles unaccounted for in the stored census - including
+    vertical_arbitrage, the clearest signal of feed quality.
+    """
+    import sys as _sys
+    from pathlib import Path as _P
+    _sys.path.insert(0, str(_P(__file__).resolve().parents[1] / "src"))
+    from tp2agent.store import SCAN_FIELDS
+
+    chain = _clean_chain()
+    _, census = build_rectangles(chain, R)
+    missing = [k for k in census if k not in SCAN_FIELDS]
+    assert not missing, f"census buckets not persisted: {missing}"
+
+
+def test_live_census_sums_to_considered():
+    """On a chain that exercises every path, the buckets must still balance."""
+    chain = _clean_chain()
+    opt = chain.calls[T1][635.0]
+    chain.calls[T1][635.0] = OptionQuote(opt.symbol, 635.0, T1, "C", _q(1.00, 1.05))
+    _, c = build_rectangles(chain, R)
+    total = sum(
+        c[k] for k in (
+            "strike_gap_too_wide", "coverage_ratio_too_wide", "roundup_too_far",
+            "leg_too_cheap", "degenerate_legs", "vertical_arbitrage",
+            "adjusted_strike_unlisted", "leg_missing", "leg_unusable",
+            "no_violation", "below_tick_bound", "detected",
+        )
+    )
+    assert total == c["rectangles_considered"], (total, c)
+
+
 def test_detection_defaults_match_the_papers():
     """Defaults must impose no execution-side screen."""
     cfg = RectangleConfig()

@@ -90,8 +90,12 @@ SCAN_FIELDS = [
     "ts", "feed", "spot", "quote_age_s", "duration_s",
     "expiry_pairs", "rectangles_considered", "no_forward",
     "adjusted_strike_unlisted", "leg_missing", "leg_unusable",
-    "strike_gap_too_wide", "coverage_ratio_too_wide", "no_violation",
-    "below_tick_bound", "detected", "episodes",
+    "strike_gap_too_wide", "coverage_ratio_too_wide",
+    # These four were computed but never persisted, leaving ~15% of considered
+    # rectangles unaccounted for in scans.csv. vertical_arbitrage in particular
+    # is the single most diagnostic number for feed quality.
+    "roundup_too_far", "leg_too_cheap", "degenerate_legs", "vertical_arbitrage",
+    "no_violation", "below_tick_bound", "detected", "episodes",
     "margin_count", "margin_min", "margin_p05", "margin_p25", "margin_median",
     "margin_p75", "margin_p95", "margin_max",
     # Raw count of rectangles with rhs > lhs, BEFORE the tick/buffer test. Almost
@@ -108,6 +112,8 @@ VIOLATION_FIELDS = [
     "A_bid", "A_ask", "B_bid", "B_ask", "C_bid", "C_ask", "D_bid", "D_ask",
     "lhs", "rhs", "violation_size", "normalized_severity",
     "tick_bound", "coverage_ratio", "theory_category", "theory_tradable",
+    # Execution-side assessment, recorded but never used to suppress a detection.
+    "exec_tradable", "exec_reasons", "min_leg_mid",
 ]
 
 
@@ -162,6 +168,10 @@ class ScanStore:
                 census.get("leg_unusable", 0),
                 census.get("strike_gap_too_wide", 0),
                 census.get("coverage_ratio_too_wide", 0),
+                census.get("roundup_too_far", 0),
+                census.get("leg_too_cheap", 0),
+                census.get("degenerate_legs", 0),
+                census.get("vertical_arbitrage", 0),
                 census.get("no_violation", 0),
                 census.get("below_tick_bound", 0),
                 census.get("detected", 0),
@@ -180,7 +190,8 @@ class ScanStore:
         )
 
     def record_violation(
-        self, ts: datetime, feed: str, spot: float, cand, category: str, tradable: bool
+        self, ts: datetime, feed: str, spot: float, cand, category: str,
+        tradable: bool, flags=None,
     ) -> None:
         self._append(
             self.violations,
@@ -198,6 +209,9 @@ class ScanStore:
                 f"{cand.violation_size:.6f}", f"{cand.normalized_severity:.6f}",
                 f"{cand.tick_bound:.6f}", f"{cand.coverage_ratio:.4f}",
                 category, tradable,
+                int(flags.tradable) if flags else "",
+                "; ".join(flags.reasons) if flags else "",
+                f"{flags.min_leg_mid:.4f}" if flags else "",
             ],
         )
 
