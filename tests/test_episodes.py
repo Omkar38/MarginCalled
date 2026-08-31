@@ -197,6 +197,65 @@ def test_episode_file_is_rewritten_with_state():
         assert float(rows[0]["duration_seconds"]) == 300
 
 
+def test_state_survives_restart():
+    """A restarted tracker must reload episodes, not erase them.
+
+    flush() rewrites episodes.csv wholesale from the in-memory registry, so a
+    tracker that started empty would wipe every episode recorded before the
+    restart. Observed live: 27 SPX episodes lost on a scanner restart.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        tr1 = _tracker(tmp)
+        tr1.observe(T0, _clean_chain(), [_cand(0.05)], {})
+        ep_id = next(iter(tr1.episodes))
+        assert len(tr1.episodes) == 1
+
+        tr2 = _tracker(tmp)  # simulate a restart
+        assert len(tr2.episodes) == 1, "episodes must reload from disk"
+        assert ep_id in tr2.episodes
+        restored = tr2.episodes[ep_id]
+        assert restored.status == STATUS_ACTIVE
+        assert abs(restored.peak_severity - 0.05) < 1e-9
+        assert restored.first_seen == T0
+
+        # And flushing after restart must not blank the file.
+        tr2.flush()
+        rows = list(csv.DictReader((tmp / "episodes.csv").open()))
+        assert len(rows) == 1
+
+
+def test_event_index_continues_after_restart():
+    """Path indices must continue, not restart at zero."""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        chain = _clean_chain()
+        tr1 = _tracker(tmp)
+        tr1.observe(T0, chain, [_cand(0.05)], {})
+        tr1.observe(T0 + timedelta(minutes=5), chain, [_cand(0.06)], {})
+
+        tr2 = _tracker(tmp)
+        tr2.observe(T0 + timedelta(minutes=10), chain, [_cand(0.07)], {})
+        rows = list(csv.DictReader((tmp / "episode_path.csv").open()))
+        assert [int(r["event_index"]) for r in rows] == [0, 1, 2]
+
+
+def test_reverted_episodes_are_preserved_across_restart():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        chain = _clean_chain()
+        tr1 = _tracker(tmp, revert_after=1)
+        tr1.observe(T0, chain, [_cand(0.05)], {})
+        tr1.observe(T0 + timedelta(minutes=5), chain, [], {})
+        assert next(iter(tr1.episodes.values())).status == STATUS_REVERTED
+
+        tr2 = _tracker(tmp)
+        assert len(tr2.episodes) == 1
+        ep = next(iter(tr2.episodes.values()))
+        assert ep.status == STATUS_REVERTED
+        assert ep.reverted_at == T0 + timedelta(minutes=5)
+
+
 def test_summary_reports_durations():
     with tempfile.TemporaryDirectory() as d:
         tr = _tracker(Path(d), revert_after=1)

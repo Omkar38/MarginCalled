@@ -30,7 +30,7 @@ from __future__ import annotations
 import csv
 import hashlib
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from .rectangles import ChainSnapshot, RectangleCandidate
@@ -105,6 +105,36 @@ def remeasure(chain: ChainSnapshot, ep: "Episode") -> Measurement:
         rhs=rhs,
         severity=(rhs - lhs) / rhs,
         violation_size=rhs - lhs,
+    )
+
+
+def _dt(text: str) -> datetime | None:
+    return datetime.fromisoformat(text) if text else None
+
+
+def _episode_from_row(row: dict) -> "Episode":
+    """Rebuild an Episode from a persisted CSV row."""
+    return Episode(
+        episode_id=row["episode_id"],
+        underlying=row["underlying"],
+        T1=date.fromisoformat(row["T1"]),
+        T2=date.fromisoformat(row["T2"]),
+        K1=float(row["K1"]), K2=float(row["K2"]),
+        K1_adj=float(row["K1_adj"]), K2_adj=float(row["K2_adj"]),
+        sym_A=row["sym_A"], sym_B=row["sym_B"],
+        sym_C=row["sym_C"], sym_D=row["sym_D"],
+        theory_category=row.get("theory_category", ""),
+        first_seen=_dt(row["first_seen"]),
+        last_seen=_dt(row["last_seen"]),
+        last_violating=_dt(row["last_violating"]),
+        observations=int(row["observations"]),
+        violating_observations=int(row["violating_observations"]),
+        first_severity=float(row["first_severity"]),
+        peak_severity=float(row["peak_severity"]),
+        peak_at=_dt(row.get("peak_at", "")),
+        last_severity=float(row["last_severity"]),
+        status=row["status"],
+        reverted_at=_dt(row.get("reverted_at", "")),
     )
 
 
@@ -208,6 +238,41 @@ class EpisodeTracker:
         if not self.path_file.exists():
             with self.path_file.open("w", newline="", encoding="utf-8") as fh:
                 csv.writer(fh).writerow(PATH_FIELDS)
+        self._load()
+
+    # -- restart recovery --------------------------------------------------
+
+    def _load(self) -> None:
+        """Restore prior state from disk.
+
+        `flush` rewrites episodes.csv wholesale from the in-memory registry, so a
+        tracker that started empty would erase every episode recorded before a
+        restart. State is therefore reloaded here, and the per-episode event
+        index is recovered from the append-only path file so indices continue
+        rather than restarting at zero.
+        """
+        if self.episode_file.exists():
+            with self.episode_file.open(encoding="utf-8") as fh:
+                for row in csv.DictReader(fh):
+                    try:
+                        ep = _episode_from_row(row)
+                    except (KeyError, ValueError):
+                        continue
+                    self.episodes[ep.episode_id] = ep
+                    self._non_violating_streak[ep.episode_id] = 0
+
+        if self.path_file.exists():
+            with self.path_file.open(encoding="utf-8") as fh:
+                for row in csv.DictReader(fh):
+                    ep_id = row.get("episode_id")
+                    try:
+                        idx = int(row.get("event_index", 0))
+                    except ValueError:
+                        continue
+                    if ep_id:
+                        self._event_index[ep_id] = max(
+                            self._event_index.get(ep_id, 0), idx + 1
+                        )
 
     # -- persistence -------------------------------------------------------
 
