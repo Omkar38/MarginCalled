@@ -93,7 +93,12 @@ SCAN_FIELDS = [
     "strike_gap_too_wide", "coverage_ratio_too_wide", "no_violation",
     "below_tick_bound", "detected", "episodes",
     "margin_count", "margin_min", "margin_p05", "margin_p25", "margin_median",
-    "margin_p75", "margin_p95", "margin_max", "violations", "near_misses",
+    "margin_p75", "margin_p95", "margin_max",
+    # Raw count of rectangles with rhs > lhs, BEFORE the tick/buffer test. Almost
+    # all of these are quantisation noise and are correctly discarded; the
+    # identity raw_positive_margins == detected + below_tick_bound holds exactly.
+    # Named explicitly so it is not misread as a count of detections.
+    "raw_positive_margins", "near_misses",
 ]
 
 VIOLATION_FIELDS = [

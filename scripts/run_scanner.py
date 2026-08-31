@@ -31,6 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from tp2agent.alpaca import AlpacaDataClient, AlpacaError  # noqa: E402
+from tp2agent.episodes import EpisodeTracker, episode_id  # noqa: E402
 from tp2agent.rectangles import (  # noqa: E402
     RectangleConfig,
     build_rectangles,
@@ -91,6 +92,7 @@ def scan_once(
     cfg: RectangleConfig,
     underlying: str,
     expiries: list[date],
+    tracker: EpisodeTracker | None = None,
 ) -> dict:
     started = time.monotonic()
     ts = datetime.now()
@@ -114,6 +116,7 @@ def scan_once(
         ts, feed.feed, spot, age, duration, census, len(episodes), summary
     )
 
+    categories: dict[str, str] = {}
     for cand in episodes:
         rect = _to_theory_rectangle(cand)
         gate = (
@@ -121,9 +124,14 @@ def scan_once(
             if is_european
             else classify(rect, dividends, SHORT_RATE, violation_size=cand.violation_size)
         )
+        categories[episode_id(underlying, cand)] = gate.category.value
         store.record_violation(
             ts, feed.feed, spot, cand, gate.category.value, gate.is_tradable
         )
+
+    ep_stats = {}
+    if tracker is not None:
+        ep_stats = tracker.observe(ts, chain, episodes, categories)
 
     closest = summary.maximum if summary.count else float("nan")
     print(
@@ -135,7 +143,14 @@ def scan_once(
         f"[{duration:.1f}s]"
     )
     if episodes:
-        print(f"      *** {len(episodes)} VIOLATION(S) recorded to violations.csv ***")
+        print(f"      *** {len(episodes)} VIOLATION(S) recorded ***")
+    if ep_stats and any(ep_stats.values()):
+        s = tracker.summary() if tracker else {}
+        print(
+            f"      episodes: +{ep_stats['new']} new, {ep_stats['continuing']} continuing, "
+            f"{ep_stats['reverted']} reverted, {ep_stats['unobservable']} unobservable "
+            f"| tracking {s.get('active', 0)} active / {s.get('total', 0)} total"
+        )
     return census
 
 
@@ -188,6 +203,7 @@ def main() -> int:
     print(f"expiries   : {', '.join(e.isoformat() for e in expiries)}")
 
     store = ScanStore(data_dir)
+    tracker = EpisodeTracker(data_dir, underlying)
     cfg = RectangleConfig(
         max_relative_spread=args.max_spread,
         violation_buffer_pct=args.buffer,
@@ -201,7 +217,7 @@ def main() -> int:
             print(f"  {now.strftime('%H:%M:%S')}  outside market hours, sleeping")
         else:
             try:
-                scan_once(client, store, cfg, underlying, expiries)
+                scan_once(client, store, cfg, underlying, expiries, tracker)
                 scans += 1
             except AlpacaError as exc:
                 print(f"  {now.strftime('%H:%M:%S')}  scan failed: {exc}")
@@ -215,7 +231,17 @@ def main() -> int:
                 break
             time.sleep(1)
 
+    summary = tracker.summary()
     print(f"\n  {scans} scan(s) recorded to {store.scans}")
+    print(
+        f"  episodes: {summary['total']} total, {summary['active']} active, "
+        f"{summary['reverted']} reverted"
+    )
+    if summary["reverted"]:
+        print(
+            f"  reverted-episode duration: median {summary['median_duration_s']:.0f}s, "
+            f"max {summary['max_duration_s']:.0f}s"
+        )
     return 0
 
 
