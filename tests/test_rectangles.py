@@ -217,6 +217,7 @@ def test_census_accounts_for_every_rectangle():
         + census["vertical_arbitrage"]
         + census["degenerate_legs"]
         + census["leg_too_cheap"]
+        + census["roundup_too_far"]
         + census["no_violation"]
         + census["below_tick_bound"]
         + census["detected"]
@@ -259,6 +260,32 @@ def test_corrupting_the_whole_expiry_fails_at_the_forward():
     assert census["no_forward"] > 0, census
     assert census["rectangles_considered"] == 0
     assert found == []
+
+
+def test_distant_roundup_is_rejected():
+    """A rounded-up strike far from the exact one means an illiquid board region.
+
+    Glasserman, Li & Pirjol (2025) sec 4.1 discard the pair when no strike trades
+    within $50 of the rounded-up strike; expressed here as a fraction of forward.
+    """
+    chain = _clean_chain()
+    # Strikes are $5 apart on a ~$645 forward, so a 0.1%-of-forward cap (~$0.65)
+    # rejects almost every rounding; a 5% cap (~$32) admits them all. The screen
+    # must respond to the threshold rather than to the chain.
+    _, tight = build_rectangles(chain, R, RectangleConfig(max_strike_roundup_pct=0.001))
+    _, loose = build_rectangles(chain, R, RectangleConfig(max_strike_roundup_pct=0.05))
+    assert tight["roundup_too_far"] > 0, tight
+    assert loose["roundup_too_far"] == 0, loose
+    assert tight["rectangles_considered"] == loose["rectangles_considered"]
+
+
+def test_chain_counts_settlement_collisions():
+    """Two contracts sharing (expiry, strike) must be counted, never silent."""
+    chain = _clean_chain()
+    before = chain.collisions
+    opt = chain.calls[T1][640.0]
+    chain.add(OptionQuote("DIFFERENT_SYMBOL", 640.0, T1, "C", _q(1.0, 1.1)))
+    assert chain.collisions == before + 1
 
 
 def test_penny_legs_are_excluded():

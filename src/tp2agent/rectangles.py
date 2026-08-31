@@ -114,9 +114,23 @@ class ChainSnapshot:
     calls: dict[date, dict[float, OptionQuote]] = field(default_factory=dict)
     puts: dict[date, dict[float, OptionQuote]] = field(default_factory=dict)
 
+    collisions: int = 0
+
     def add(self, opt: OptionQuote) -> None:
+        """Insert a quote, counting any (expiry, strike) collision.
+
+        Two contracts can share an expiry date and strike but differ in settlement
+        (AM-settled monthlies vs PM-settled weeklies on an index). Silently
+        overwriting one with the other would build rectangles from mixed
+        settlement types, which the source study explicitly avoids. Alpaca has not
+        been observed to return such pairs, so this counts rather than raises -
+        but it must never pass unnoticed.
+        """
         book = self.calls if opt.right == "C" else self.puts
-        book.setdefault(opt.expiry, {})[opt.strike] = opt
+        by_strike = book.setdefault(opt.expiry, {})
+        if opt.strike in by_strike and by_strike[opt.strike].symbol != opt.symbol:
+            self.collisions += 1
+        by_strike[opt.strike] = opt
 
     def expiries(self) -> list[date]:
         return sorted(self.calls)
@@ -150,6 +164,13 @@ class RectangleConfig:
     # Coverage (Finding 1): reject wide-gap rectangles where the forced 1:1 cap
     # would badly distort the intended position.
     max_coverage_ratio: float = 1.25
+
+    # Rounding proximity. Glasserman, Li & Pirjol (2025) sec. 4.1: "if no strike
+    # is traded within $50 of the rounded-up strike, we discard this option as it
+    # indicates that this particular strike is in an illiquid region where few
+    # neighboring contracts are traded." Expressed here as a fraction of the
+    # forward so it transfers across underlyings ($50 on a ~6000 index is ~0.83%).
+    max_strike_roundup_pct: float = 0.01
 
     # Forward estimation
     min_parity_strikes: int = 5
@@ -356,6 +377,7 @@ def build_rectangles(
         "leg_unusable": 0,
         "strike_gap_too_wide": 0,
         "coverage_ratio_too_wide": 0,
+        "roundup_too_far": 0,
         "leg_too_cheap": 0,
         "degenerate_legs": 0,
         "vertical_arbitrage": 0,
@@ -402,10 +424,23 @@ def build_rectangles(
                         census["strike_gap_too_wide"] += 1
                         continue
 
-                    K1_adj = round_up_to_listed(K1 * F2 / F1, listed_T2)
-                    K2_adj = round_up_to_listed(K2 * F1 / F2, listed_T1)
+                    exact_1 = K1 * F2 / F1
+                    exact_2 = K2 * F1 / F2
+                    K1_adj = round_up_to_listed(exact_1, listed_T2)
+                    K2_adj = round_up_to_listed(exact_2, listed_T1)
                     if K1_adj is None or K2_adj is None:
                         census["adjusted_strike_unlisted"] += 1
+                        continue
+
+                    # The rounded-up strike must actually be near the exact one.
+                    # A distant next-listed strike means an illiquid region of the
+                    # board, and the rounding would move the comparison far from
+                    # the rectangle the theory specifies.
+                    if (
+                        K1_adj - exact_1 > cfg.max_strike_roundup_pct * F2
+                        or K2_adj - exact_2 > cfg.max_strike_roundup_pct * F1
+                    ):
+                        census["roundup_too_far"] += 1
                         continue
 
                     A = chain.calls[T1].get(K1)
