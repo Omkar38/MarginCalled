@@ -125,6 +125,49 @@ def remeasure(chain: ChainSnapshot, ep: "Episode") -> Measurement:
     )
 
 
+def _migrate_csv_header(path: Path, fields: list[str]) -> None:
+    """Create the file, or widen it in place when columns have been added.
+
+    An append-only CSV whose header was written by an older build will keep
+    accepting wider rows without complaint: the header still declares ten
+    columns while each new row carries eighteen, and csv.DictReader silently
+    drops the surplus into a None key. The data is present but unlabelled, which
+    is worse than missing because it reads as valid.
+
+    Short rows are padded and the header rewritten, so old and new rows line up
+    under one schema. The previous file is kept alongside as .bak.
+    """
+    if not path.exists():
+        with path.open("w", newline="", encoding="utf-8") as fh:
+            csv.writer(fh).writerow(fields)
+        return
+
+    with path.open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.reader(fh))
+    if not rows:
+        with path.open("w", newline="", encoding="utf-8") as fh:
+            csv.writer(fh).writerow(fields)
+        return
+    if rows[0] == fields:
+        return
+
+    old_width = len(rows[0])
+    if old_width > len(fields):
+        raise ValueError(
+            f"{path} has {old_width} columns but the schema declares "
+            f"{len(fields)}; refusing to drop data"
+        )
+
+    path.replace(path.with_suffix(".csv.bak"))
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(fields)
+        for row in rows[1:]:
+            if len(row) < len(fields):
+                row = row + [""] * (len(fields) - len(row))
+            writer.writerow(row[: len(fields)])
+
+
 def _dt(text: str) -> datetime | None:
     return datetime.fromisoformat(text) if text else None
 
@@ -256,9 +299,7 @@ class EpisodeTracker:
         self._event_index: dict[str, int] = {}
         self.path_file = self.root / "episode_path.csv"
         self.episode_file = self.root / "episodes.csv"
-        if not self.path_file.exists():
-            with self.path_file.open("w", newline="", encoding="utf-8") as fh:
-                csv.writer(fh).writerow(PATH_FIELDS)
+        _migrate_csv_header(self.path_file, PATH_FIELDS)
         self._load()
 
     # -- restart recovery --------------------------------------------------

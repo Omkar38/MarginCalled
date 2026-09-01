@@ -135,9 +135,16 @@ class ScanStore:
 
     @staticmethod
     def _ensure(path: Path, fields: list[str]) -> None:
-        if not path.exists():
-            with path.open("w", newline="", encoding="utf-8") as handle:
-                csv.writer(handle).writerow(fields)
+        """Create the file, or widen it when columns have been added.
+
+        Without this an older header keeps accepting wider rows and the surplus
+        values are written unlabelled - present in the file, invisible to any
+        reader. See _migrate_csv_header in episodes.py for the same problem
+        found live on episode_path.csv.
+        """
+        from .episodes import _migrate_csv_header
+
+        _migrate_csv_header(path, fields)
 
     @staticmethod
     def _append(path: Path, row: list) -> None:

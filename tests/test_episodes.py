@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tp2agent.episodes import (  # noqa: E402
+    PATH_FIELDS,
+    _migrate_csv_header,
     STATUS_ACTIVE,
     STATUS_REVERTED,
     EpisodeTracker,
@@ -241,6 +243,59 @@ def test_missing_legs_have_no_quotes_but_still_log():
         rows = list(csv.DictReader((tmp / "episode_path.csv").open()))
         assert int(rows[1]["observable"]) == 0
         assert "A" in rows[1]["missing_legs"]
+
+
+def test_header_migration_widens_without_losing_rows():
+    """An older narrow header must be widened, not left to mislabel new rows.
+
+    Found live: episode_path.csv carried a 10-column header while the scanner
+    appended 18-field rows. csv.DictReader dropped the surplus into a None key,
+    so the leg quotes were in the file but invisible to any reader.
+    """
+    import csv as _csv
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "episode_path.csv"
+        old_fields = PATH_FIELDS[:10]
+        with path.open("w", newline="") as fh:
+            w = _csv.writer(fh)
+            w.writerow(old_fields)
+            w.writerow(["ep1", "2026-09-01T10:00:00", "0", "1", "1",
+                        "0.05", "1.0", "10.0", "11.0", ""])
+        _migrate_csv_header(path, PATH_FIELDS)
+
+        rows = list(_csv.DictReader(path.open()))
+        assert len(rows) == 1
+        assert rows[0]["episode_id"] == "ep1"
+        assert rows[0]["severity"] == "0.05"
+        assert rows[0]["A_bid"] == "", "old rows pad, not shift"
+        assert rows[0].get(None) is None, "no unlabelled surplus"
+        assert path.with_suffix(".csv.bak").exists(), "original must be kept"
+
+
+def test_migration_is_idempotent():
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "p.csv"
+        _migrate_csv_header(path, PATH_FIELDS)
+        _migrate_csv_header(path, PATH_FIELDS)
+        import csv as _csv
+        assert list(_csv.reader(path.open()))[0] == PATH_FIELDS
+
+
+def test_migration_refuses_to_narrow():
+    """Never silently drop columns."""
+    import csv as _csv
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "p.csv"
+        with path.open("w", newline="") as fh:
+            _csv.writer(fh).writerow(PATH_FIELDS + ["extra_col"])
+        try:
+            _migrate_csv_header(path, PATH_FIELDS)
+        except ValueError as exc:
+            assert "refusing to drop" in str(exc)
+            return
+        raise AssertionError("narrowing must raise")
 
 
 def test_state_survives_restart():
