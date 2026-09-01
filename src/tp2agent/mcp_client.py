@@ -29,11 +29,18 @@ import threading
 from pathlib import Path
 from typing import Any
 
-__all__ = ["MCPError", "AlpacaMCPClient", "READ_ONLY_TOOLSETS"]
+__all__ = ["MCPError", "AlpacaMCPClient", "READ_ONLY_TOOLSETS", "TRADING_TOOLSETS"]
 
 # Toolsets loaded on the server. "trading" is deliberately absent, so the
 # order-placement tools are never registered in the first place.
 READ_ONLY_TOOLSETS = "account,assets,market_info"
+
+# Adds place_option_order, cancel_order_by_id, close_position and the rest.
+# Used only by the executor, and only after the risk gates approve. The
+# narrator gets a separate client on READ_ONLY_TOOLSETS so it remains provably
+# unable to trade: two clients, two toolsets, one of which has no order tool
+# loaded at all.
+TRADING_TOOLSETS = "account,assets,market_info,trading"
 
 PROTOCOL_VERSION = "2024-11-05"
 
@@ -237,6 +244,25 @@ class AlpacaMCPClient:
             if any(word in name for word in self.MUTATING_WORDS):
                 found.append(tool.get("name"))
         return sorted(found)
+
+    def place_option_order(self, payload: dict) -> str:
+        """Submit an options order through the MCP server.
+
+        The payload is the same shape the REST endpoint takes. Sending orders
+        through MCP rather than REST is a competition requirement question, not
+        a safety one: this is a direct tool call from our own code, with no
+        language model in the path. Authorisation still comes from
+        risk.evaluate, upstream of here.
+        """
+        if "place_option_order" not in {t.get("name") for t in self.list_tools()}:
+            raise MCPError(
+                "place_option_order is not loaded; construct the client with "
+                "toolsets=TRADING_TOOLSETS"
+            )
+        return self.call("place_option_order", payload)
+
+    def cancel_order(self, order_id: str) -> str:
+        return self.call("cancel_order_by_id", {"order_id": order_id})
 
     def assert_no_order_tools(self) -> list[str]:
         """Order-placement tools specifically. Kept separate from mutation."""

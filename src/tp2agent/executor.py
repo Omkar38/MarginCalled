@@ -36,6 +36,7 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from enum import Enum
 from datetime import datetime
 
 from .alpaca import LIVE_HOST, TRADING_HOST, AlpacaDataClient, AlpacaError
@@ -44,6 +45,7 @@ from .risk import RiskDecision
 
 __all__ = [
     "ExecutionError",
+    "Transport",
     "LimitPolicy",
     "OrderPlan",
     "Executor",
@@ -89,7 +91,10 @@ class OrderPlan:
             "qty": str(self.qty),
             "type": "limit",
             "time_in_force": "day",
-            "limit_price": f"{abs(self.limit_price):.2f}",
+            # Alpaca's MLeg convention: positive = debit (we pay), negative =
+            # credit (we receive). The sign must be preserved - taking the
+            # absolute value would submit a credit spread as a debit.
+            "limit_price": f"{self.limit_price:.2f}",
             "legs": self.legs,
         }
 
@@ -174,11 +179,33 @@ def _leg_quote(spec: PositionSpec, symbol: str) -> tuple[float, float]:
     raise ExecutionError(f"no quote for leg {symbol}")
 
 
+class Transport(str, Enum):
+    """How the order reaches Alpaca.
+
+    MCP is the default. The competition requires the Trading API plus either the
+    MCP server or the CLI, and routing orders through MCP removes any argument
+    about whether the requirement is met. It costs nothing in safety: this is a
+    direct tool call from our own code, not a language model deciding to trade.
+    REST is kept as a fallback for when the MCP server is unavailable.
+    """
+
+    MCP = "mcp"
+    REST = "rest"
+
+
 class Executor:
     """Submits MLeg orders. Requires an approved RiskDecision for every send."""
 
-    def __init__(self, client: AlpacaDataClient, live_ok: bool = False) -> None:
+    def __init__(
+        self,
+        client: AlpacaDataClient,
+        live_ok: bool = False,
+        transport: "Transport" = None,
+        mcp: object = None,
+    ) -> None:
         self.c = client
+        self.transport = transport or Transport.MCP
+        self.mcp = mcp
         if live_ok:
             raise ExecutionError("live trading is not supported by this project")
 
@@ -221,17 +248,36 @@ class Executor:
         if payload.get("type") != "limit":
             raise ExecutionError("only limit orders may be sent")
         if dry_run:
-            return {"dry_run": True, "payload": payload,
+            return {"dry_run": True, "transport": self.transport.value,
+                    "payload": payload,
                     "submitted_at": datetime.now().isoformat(timespec="seconds")}
+
+        stamp = datetime.now().isoformat(timespec="seconds")
+        if self.transport is Transport.MCP:
+            if self.mcp is None:
+                raise ExecutionError(
+                    "transport is MCP but no MCP client was supplied; construct "
+                    "Executor(..., mcp=AlpacaMCPClient(toolsets=TRADING_TOOLSETS))"
+                )
+            text = self.mcp.place_option_order(payload)
+            return {
+                "dry_run": False,
+                "transport": "mcp",
+                "response": text,
+                "payload": payload,
+                "submitted_at": stamp,
+            }
+
         status, data = self._request("POST", "/v2/orders", payload)
         return {
             "dry_run": False,
+            "transport": "rest",
             "status": status,
             "accepted": status in (200, 201),
             "order_id": data.get("id"),
             "response": data,
             "payload": payload,
-            "submitted_at": datetime.now().isoformat(timespec="seconds"),
+            "submitted_at": stamp,
         }
 
     def cancel(self, order_id: str) -> tuple[int, dict]:

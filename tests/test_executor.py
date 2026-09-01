@@ -14,6 +14,7 @@ from tp2agent.executor import (  # noqa: E402
     ExecutionError,
     Executor,
     LimitPolicy,
+    Transport,
     build_order,
 )
 from tp2agent.position import PositionConfig, Structure, build_position  # noqa: E402
@@ -167,6 +168,66 @@ def test_live_host_is_refused():
         raise AssertionError("the live host must be refused")
     finally:
         mod.TRADING_HOST = saved
+
+
+def test_limit_price_sign_is_preserved():
+    """Alpaca MLeg: positive = debit, negative = credit.
+
+    Taking the absolute value would submit a credit spread as a debit - an order
+    to PAY what we intended to RECEIVE.
+    """
+    plan = build_order(_spec())
+    plan.limit_price = -1.25
+    assert plan.to_payload()["limit_price"] == "-1.25"
+    plan.limit_price = 2.50
+    assert plan.to_payload()["limit_price"] == "2.50"
+
+
+def test_default_transport_is_mcp():
+    ex = Executor(_StubClient())
+    assert ex.transport is Transport.MCP
+
+
+def test_mcp_transport_without_client_is_refused():
+    ex = Executor(_StubClient(), transport=Transport.MCP)
+    try:
+        ex.submit(build_order(_spec()), _approved(), dry_run=False)
+    except ExecutionError as exc:
+        assert "no MCP client was supplied" in str(exc)
+        return
+    raise AssertionError("MCP transport without a client must be refused")
+
+
+def test_mcp_submission_goes_through_the_tool():
+    class _StubMCP:
+        def __init__(self):
+            self.sent = None
+
+        def place_option_order(self, payload):
+            self.sent = payload
+            return '{"id": "stub-order-1"}'
+
+    mcp = _StubMCP()
+    ex = Executor(_StubClient(), transport=Transport.MCP, mcp=mcp)
+    out = ex.submit(build_order(_spec()), _approved(), dry_run=False)
+    assert out["transport"] == "mcp"
+    assert mcp.sent is not None, "the MCP tool was not called"
+    assert mcp.sent["order_class"] == "mleg"
+    assert mcp.sent["type"] == "limit"
+
+
+def test_mcp_transport_still_requires_risk_approval():
+    class _StubMCP:
+        def place_option_order(self, payload):
+            raise AssertionError("must not be reached without approval")
+
+    ex = Executor(_StubClient(), transport=Transport.MCP, mcp=_StubMCP())
+    try:
+        ex.submit(build_order(_spec()), _rejected(), dry_run=False)
+    except ExecutionError as exc:
+        assert "risk gates did not approve" in str(exc)
+        return
+    raise AssertionError("approval must gate MCP submission too")
 
 
 def test_module_never_constructs_a_market_order():
