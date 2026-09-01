@@ -22,6 +22,7 @@ USAGE.
 from __future__ import annotations
 
 import argparse
+import json
 import signal
 import sys
 import time
@@ -38,6 +39,15 @@ from tp2agent.rectangles import (  # noqa: E402
     dedupe_episodes,
     tradability_flags,
 )
+from tp2agent.executor import (  # noqa: E402
+    Executor,
+    LimitPolicy,
+    Transport,
+    build_order,
+)
+from tp2agent.mcp_client import TRADING_TOOLSETS, AlpacaMCPClient  # noqa: E402
+from tp2agent.position import build_position, config_for, structure_for  # noqa: E402
+from tp2agent.risk import AccountState, RiskLimits, evaluate  # noqa: E402
 from tp2agent.store import MarginSummary, ScanStore  # noqa: E402
 from tp2agent.theory_gate import (  # noqa: E402
     Contract,
@@ -78,6 +88,105 @@ def _to_theory_rectangle(cand) -> Rectangle:
     )
 
 
+class TradeContext:
+    """Turns approved candidates into orders. Off unless --trade is passed.
+
+    The structure is chosen by the underlying, not by preference: Alpaca rejects
+    a multi-leg order whose European legs span different expirations (422 /
+    42210000), so index underlyings can only trade the same-expiry T1 pair while
+    American ones may use the full four-leg rectangle. Both verified live.
+    """
+
+    def __init__(self, client, underlying: str, enabled: bool, dry_run: bool,
+                 max_orders: int, shade: float, data_dir: Path) -> None:
+        self.client = client
+        self.underlying = underlying
+        self.enabled = enabled
+        self.dry_run = dry_run
+        self.max_orders = max_orders
+        self.policy = LimitPolicy(shade_spreads=shade)
+        self.structure = structure_for(underlying)
+        self.sent = 0
+        self.mcp = None
+        self.executor = None
+        # Must follow --data-dir, not a hardcoded path, or a test run writes
+        # its orders into the live data directory.
+        self.log = Path(data_dir) / "orders.jsonl"
+
+    def open(self) -> None:
+        if not self.enabled:
+            return
+        self.mcp = AlpacaMCPClient(toolsets=TRADING_TOOLSETS)
+        self.mcp.start()
+        self.executor = Executor(
+            self.client, transport=Transport.MCP, mcp=self.mcp
+        )
+
+    def close(self) -> None:
+        if self.mcp is not None:
+            self.mcp.stop()
+            self.mcp = None
+
+    def consider(self, ts, underlying, gated, quote_age, spot) -> None:
+        if not self.enabled or self.executor is None:
+            return
+        if self.sent >= self.max_orders:
+            return
+
+        acct = self.client.account()
+        equity = float(acct.get("equity", 0) or 0)
+        held = {p.get("symbol") for p in (self.executor.positions() or [])}
+        state = AccountState(
+            equity=equity,
+            starting_equity=equity,
+            buying_power=float(acct.get("buying_power", 0) or 0),
+            open_position_count=len(held),
+            open_leg_symbols=frozenset(held),
+        )
+        limits = RiskLimits()
+
+        for cand, category in gated:
+            if self.sent >= self.max_orders:
+                return
+            spec = build_position(cand, config_for(underlying))
+            if not spec.is_executable:
+                continue
+            decision = evaluate(
+                spec, category, state, limits, datetime.now(), quote_age,
+                detected=cand, fresh=cand,
+            )
+            record = {
+                "ts": ts.isoformat(timespec="seconds"),
+                "underlying": underlying,
+                "structure": self.structure.value,
+                "episode": cand.episode_key,
+                "category": category.value,
+                "risk": decision.to_record(),
+                "position": spec.to_record(),
+            }
+            if not decision.approved:
+                self._write(record)
+                continue
+            plan = build_order(spec, self.policy)
+            record["order"] = plan.to_record()
+            try:
+                result = self.executor.submit(plan, decision, dry_run=self.dry_run)
+                record["result"] = result
+                self.sent += 1
+                print(f"      ORDER {'(dry-run) ' if self.dry_run else ''}"
+                      f"{self.structure.value} {cand.episode_key} "
+                      f"limit {plan.limit_price:+.2f}")
+            except Exception as exc:  # noqa: BLE001
+                record["result"] = {"error": f"{type(exc).__name__}: {exc}"}
+                print(f"      ORDER FAILED: {exc}")
+            self._write(record)
+
+    def _write(self, record: dict) -> None:
+        self.log.parent.mkdir(parents=True, exist_ok=True)
+        with self.log.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, default=str) + "\n")
+
+
 def _in_market_hours(now: datetime) -> bool:
     """Rough US equity session check in local time. Weekends excluded."""
     if now.weekday() >= 5:
@@ -94,6 +203,7 @@ def scan_once(
     tracker: EpisodeTracker | None = None,
     dividends: list[Dividend] | None = None,
     certain_through: date | None = None,
+    trader: "TradeContext | None" = None,
 ) -> dict:
     started = time.monotonic()
     ts = datetime.now()
@@ -117,6 +227,7 @@ def scan_once(
     )
 
     categories: dict[str, str] = {}
+    gated: list = []
     n_tradable = 0
     for cand in episodes:
         rect = _to_theory_rectangle(cand)
@@ -135,6 +246,8 @@ def scan_once(
         flags = tradability_flags(cand)
         if flags.tradable:
             n_tradable += 1
+            if gate.is_tradable:
+                gated.append((cand, gate.category))
         store.record_violation(
             ts, feed.feed, spot, cand, gate.category.value, gate.is_tradable, flags
         )
@@ -142,6 +255,9 @@ def scan_once(
     ep_stats = {}
     if tracker is not None:
         ep_stats = tracker.observe(ts, chain, episodes, categories)
+
+    if trader is not None and gated:
+        trader.consider(ts, underlying, gated, age, spot)
 
     closest = summary.maximum if summary.count else float("nan")
     print(
@@ -178,9 +294,25 @@ def main() -> int:
     ap.add_argument("--market-hours", action="store_true", help="skip outside RTH")
     ap.add_argument("--data-dir", type=Path, default=None,
                     help="default: data/<UNDERLYING>")
-    ap.add_argument("--max-spread", type=float, default=0.50)
-    ap.add_argument("--buffer", type=float, default=0.02)
-    ap.add_argument("--coverage", type=float, default=1.25)
+    # Detection screens only. Execution-side limits (coverage ratio, leg price)
+    # belong in tradability_flags, downstream - putting them here suppresses the
+    # measurement itself. These defaults previously re-imposed the execution
+    # screens and cut detections from ~426 to 1-3 per scan.
+    ap.add_argument("--max-spread", type=float, default=0.50,
+                    help="liquidity screen: max relative spread per leg")
+    ap.add_argument("--buffer", type=float, default=0.0,
+                    help="extra margin above the tick bound; 0 = tick bound only")
+    ap.add_argument("--coverage", type=float, default=1e9,
+                    help="DETECTION coverage cap; effectively off by default. "
+                         "The execution cap lives in tradability_flags.")
+    ap.add_argument("--trade", action="store_true",
+                    help="submit orders for approved candidates (off by default)")
+    ap.add_argument("--live-orders", action="store_true",
+                    help="with --trade, actually send instead of dry-run")
+    ap.add_argument("--max-orders", type=int, default=3,
+                    help="hard cap on orders per scanner run")
+    ap.add_argument("--shade", type=float, default=1.0,
+                    help="limit shading in package spreads")
     args = ap.parse_args()
 
     signal.signal(signal.SIGINT, _handle_signal)
@@ -190,7 +322,13 @@ def main() -> int:
     data_dir = args.data_dir or Path("data") / underlying
     is_european = underlying in EUROPEAN_UNDERLYINGS
 
-    print("TP2 SCANNER — READ ONLY, no orders are placed")
+    if args.trade and args.live_orders:
+        banner = "TP2 SCANNER — LIVE ORDERS ENABLED"
+    elif args.trade:
+        banner = "TP2 SCANNER — trading path active, dry-run (nothing is sent)"
+    else:
+        banner = "TP2 SCANNER — READ ONLY, no orders are placed"
+    print(banner)
     print(f"underlying : {underlying}"
           f"{'  (European — Props 2.1-2.2 not applicable)' if is_european else '  (American)'}")
     print(f"interval   : {args.interval}s")
@@ -229,6 +367,14 @@ def main() -> int:
 
     store = ScanStore(data_dir)
     tracker = EpisodeTracker(data_dir, underlying)
+    trader = TradeContext(
+        client, underlying, args.trade, not args.live_orders,
+        args.max_orders, args.shade, data_dir,
+    )
+    trader.open()
+    print(f"trading    : {'ON' if args.trade else 'off'}"
+          f"{'' if not args.trade else (' (dry-run)' if trader.dry_run else ' LIVE')}"
+          f"  structure {trader.structure.value}  cap {args.max_orders}")
     cfg = RectangleConfig(
         max_relative_spread=args.max_spread,
         violation_buffer_pct=args.buffer,
@@ -258,7 +404,7 @@ def main() -> int:
             try:
                 scan_once(
                     client, store, cfg, underlying, expiries, tracker,
-                    dividends, certain_through,
+                    dividends, certain_through, trader,
                 )
                 scans += 1
             except AlpacaError as exc:
@@ -273,6 +419,7 @@ def main() -> int:
                 break
             time.sleep(1)
 
+    trader.close()
     summary = tracker.summary()
     print(f"\n  {scans} scan(s) recorded to {store.scans}")
     print(

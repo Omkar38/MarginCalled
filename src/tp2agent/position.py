@@ -44,6 +44,9 @@ from .rectangles import RectangleCandidate
 
 __all__ = [
     "Structure",
+    "structure_for",
+    "config_for",
+    "EUROPEAN_UNDERLYINGS",
     "Side",
     "PositionLeg",
     "PositionSpec",
@@ -180,6 +183,38 @@ class PositionSpec:
             "rejected_reason": self.rejected_reason,
             "notes": list(self.notes),
         }
+
+
+# Index options are European-style, and Alpaca refuses a multi-leg order whose
+# European legs span different expirations:
+#
+#   HTTP 422, code 42210000: "European-style option legs in a multi-leg order
+#   must have the same expiration date"
+#
+# Verified live: on SPX the four-leg rectangle and the K2 diagonal are both
+# rejected, while the T1 pair - buy A, sell D, both at T1 - is accepted. So the
+# structure is not a preference, it is dictated by the underlying's exercise
+# style. T1 is also the denomination the source study singles out as performing
+# "extraordinarily well", so the constraint costs nothing.
+EUROPEAN_UNDERLYINGS = frozenset(
+    {"SPX", "SPXW", "XSP", "VIX", "VIXW", "DJX", "NDX", "RUT"}
+)
+
+
+def structure_for(underlying: str) -> Structure:
+    """The only multi-leg structure this underlying will accept.
+
+    European -> TWO_LEG (the T1 denomination; both legs share T1).
+    American  -> FOUR_LEG (spans both expiries; accepted, verified on SPY).
+    """
+    if underlying.upper() in EUROPEAN_UNDERLYINGS:
+        return Structure.TWO_LEG
+    return Structure.FOUR_LEG
+
+
+def config_for(underlying: str, **kwargs) -> "PositionConfig":
+    """PositionConfig with the structure the underlying permits."""
+    return PositionConfig(structure=structure_for(underlying), **kwargs)
 
 
 def theoretical_weights(cand: RectangleCandidate) -> tuple[float, float]:
