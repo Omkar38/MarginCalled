@@ -58,7 +58,13 @@ from tp2agent.alpaca import (  # noqa: E402
     TRADING_HOST,
     AlpacaDataClient,
     AlpacaError,
+    _load_dotenv,
     parse_occ_symbol,
+)
+from tp2agent.mcp_client import (  # noqa: E402
+    TRADING_TOOLSETS,
+    AlpacaMCPClient,
+    MCPError,
 )
 
 
@@ -245,69 +251,180 @@ def validate_payload(rows: list[dict]) -> bool:
 # --------------------------------------------------------------------------
 
 
+def _unfillable_limit(net: float) -> str:
+    """A limit that cannot be marketable, whichever way the package leans.
+
+    Positive is a debit we pay, negative a credit we receive. Offering a cent
+    for something worth dollars, or demanding a thousand-dollar credit, is
+    unmarketable in either direction. The probe must test acceptance of the
+    payload, never acquire a position.
+    """
+    return "0.01" if net > 0 else "-1000.00"
+
+
 def probe_orders(client: AlpacaDataClient, rows: list[dict]) -> bool:
-    _rule("3. ORDER PROBES  (--submit)  far from market, cancelled immediately")
+    _rule("3. ORDER PROBES  (--submit)  via MCP, far from market, cancelled")
     if not rows:
         print("  No detections available to build a real leg set.")
         return False
 
-    trader = Trader(client)
     row = rows[-1]
+    net = (
+        float(row["A_ask"]) + float(row["B_ask"])
+        - float(row["C_bid"]) - float(row["D_bid"])
+    )
+    limit = _unfillable_limit(net)
+    print(f"  package indicative net {net:+.2f} -> probe limit {limit} "
+          f"(deliberately unmarketable)")
+
     ok = True
+    try:
+        with AlpacaMCPClient(toolsets=TRADING_TOOLSETS) as mcp:
+            loaded = {t["name"] for t in mcp.list_tools()}
+            if "place_option_order" not in loaded:
+                print("  place_option_order not loaded; cannot probe")
+                return False
+            print(f"  MCP connected, {len(loaded)} tools, order tool present")
 
-    print("\n  (a) UNCOVERED 2:3 long:short - EXPECTED TO BE REJECTED")
-    uncovered = build_mleg(
-        [
-            {"symbol": row["sym_A"], "side": "buy", "ratio_qty": "2",
-             "position_intent": "buy_to_open"},
-            {"symbol": row["sym_D"], "side": "sell", "ratio_qty": "3",
-             "position_intent": "sell_to_open"},
-        ],
-        "0.01",
-    )
-    status, data = trader.submit(uncovered)
-    if status in (200, 201):
-        oid = data.get("id")
-        print(f"      ACCEPTED (status {status}) id={oid}")
-        print("      NOTE: Alpaca accepted an uncovered ratio. The coverage")
-        print("            constraint is NOT enforced the way the design assumes.")
-        if oid:
-            trader.cancel(oid)
-            print("      cancelled")
-        ok = False
-    else:
-        msg = data.get("message") or str(data)[:160]
-        print(f"      REJECTED (status {status}): {msg}")
-        print("      Confirms the coverage constraint is real.")
+            print("\n  (a) UNCOVERED 2:3 long:short - EXPECTED TO BE REJECTED")
+            uncovered = {
+                "qty": "1", "type": "limit", "time_in_force": "day",
+                "order_class": "mleg", "limit_price": limit,
+                "legs": [
+                    {"symbol": row["sym_A"], "side": "buy", "ratio_qty": "2",
+                     "position_intent": "buy_to_open"},
+                    {"symbol": row["sym_D"], "side": "sell", "ratio_qty": "3",
+                     "position_intent": "sell_to_open"},
+                ],
+            }
+            out = mcp.place_option_order(uncovered)
+            rejected = _looks_rejected(out)
+            print(f"      {'REJECTED' if rejected else 'ACCEPTED'}: "
+                  f"{_error_message(out) if rejected else _order_id(out)}")
+            if rejected:
+                print("      Confirms the coverage constraint is real.")
+            else:
+                print("      NOTE: Alpaca accepted an uncovered ratio. The coverage")
+                print("            assumption behind the 1:1 cap does not hold.")
+                ok = False
+                _cancel_any(mcp, out)
 
-    print("\n  (b) VALID 1:1:1:1 four-leg - EXPECTED TO BE ACCEPTED")
-    valid = build_mleg(
-        [
-            {"symbol": row["sym_A"], "side": "buy", "ratio_qty": "1",
-             "position_intent": "buy_to_open"},
-            {"symbol": row["sym_B"], "side": "buy", "ratio_qty": "1",
-             "position_intent": "buy_to_open"},
-            {"symbol": row["sym_C"], "side": "sell", "ratio_qty": "1",
-             "position_intent": "sell_to_open"},
-            {"symbol": row["sym_D"], "side": "sell", "ratio_qty": "1",
-             "position_intent": "sell_to_open"},
-        ],
-        "0.01",
+            print("\n  (b) VALID 1:1:1:1 four-leg - EXPECTED TO BE ACCEPTED")
+            valid = {
+                "qty": "1", "type": "limit", "time_in_force": "day",
+                "order_class": "mleg", "limit_price": limit,
+                "legs": [
+                    {"symbol": row["sym_A"], "side": "buy", "ratio_qty": "1",
+                     "position_intent": "buy_to_open"},
+                    {"symbol": row["sym_B"], "side": "buy", "ratio_qty": "1",
+                     "position_intent": "buy_to_open"},
+                    {"symbol": row["sym_C"], "side": "sell", "ratio_qty": "1",
+                     "position_intent": "sell_to_open"},
+                    {"symbol": row["sym_D"], "side": "sell", "ratio_qty": "1",
+                     "position_intent": "sell_to_open"},
+                ],
+            }
+            out = mcp.place_option_order(valid)
+            if _looks_rejected(out):
+                print(f"      REJECTED: {_error_message(out)}")
+                print("      THIS IS THE FAILURE TO FIX BEFORE TRADING.")
+                ok = False
+            else:
+                print(f"      ACCEPTED: order id {_order_id(out)}")
+                print("      Payload shape and all four symbols are good.")
+                time.sleep(1)
+                _cancel_any(mcp, out)
+    except MCPError as exc:
+        print(f"  MCP error: {exc}")
+        return False
+
+    _rule("CLEANUP SWEEP")
+    st, open_orders = client._get(
+        f"{TRADING_HOST}/v2/orders", {"status": "open", "limit": 50}
     )
-    status, data = trader.submit(valid)
-    if status in (200, 201):
-        oid = data.get("id")
-        print(f"      ACCEPTED (status {status}) id={oid}")
-        print("      Payload shape and all four symbols are good.")
-        time.sleep(1)
-        cs, cd = trader.cancel(oid) if oid else (0, {})
-        print(f"      cancelled (status {cs})")
+    stragglers = open_orders if isinstance(open_orders, list) else []
+    if stragglers:
+        print(f"  {len(stragglers)} order(s) still open; cancelling")
+        try:
+            with AlpacaMCPClient(toolsets=TRADING_TOOLSETS) as mcp2:
+                for o in stragglers:
+                    print(f"    {o['id']} -> {mcp2.cancel_order(o['id'])[:80]}")
+        except MCPError as exc:
+            print(f"    sweep failed: {exc}")
     else:
-        msg = data.get("message") or str(data)[:200]
-        print(f"      REJECTED (status {status}): {msg}")
-        print("      THIS IS THE FAILURE TO FIX BEFORE TRADING.")
+        print("  nothing left open")
+
+    _rule("POST-PROBE STATE")
+    st, orders = client._get(f"{TRADING_HOST}/v2/orders", {"status": "all", "limit": 20})
+    st2, pos = client._get(f"{TRADING_HOST}/v2/positions")
+    n_open = sum(1 for o in orders if o.get("status") in ("new", "accepted",
+                 "pending_new", "partially_filled")) if isinstance(orders, list) else 0
+    print(f"  orders on account : {len(orders) if isinstance(orders,list) else 0}"
+          f"  ({n_open} still open)")
+    print(f"  open positions    : {len(pos) if isinstance(pos,list) else 0}")
+    if isinstance(pos, list) and pos:
+        print("  WARNING: a probe order filled. Close these before trading.")
+        for x in pos:
+            print(f"    {x.get('symbol')}  qty {x.get('qty')}")
         ok = False
     return ok
+
+
+def _looks_rejected(text: str) -> bool:
+    """Decide acceptance by parsing the response, not by matching substrings.
+
+    The first version searched for words like "error" and "40" anywhere in the
+    text. That misread an accepted order as rejected - a UUID or the MCP
+    security envelope trips it - and because the cancel lives on the accepted
+    branch, a live order was left resting on the account. Parse instead: the MCP
+    server wraps the API reply as {"_alpaca_mcp_security": ..., "data": ...},
+    where a successful order carries "id" and a rejection carries "error".
+    """
+    try:
+        payload = json.loads(text or "{}")
+    except json.JSONDecodeError:
+        return True  # unparseable means we cannot claim success
+    data = payload.get("data", payload)
+    if isinstance(data, dict):
+        if data.get("error"):
+            return True
+        if data.get("id"):
+            return False
+    return True
+
+
+def _order_id(text: str) -> str | None:
+    try:
+        payload = json.loads(text or "{}")
+    except json.JSONDecodeError:
+        return None
+    data = payload.get("data", payload)
+    return data.get("id") if isinstance(data, dict) else None
+
+
+def _error_message(text: str) -> str:
+    try:
+        payload = json.loads(text or "{}")
+    except json.JSONDecodeError:
+        return (text or "")[:200]
+    data = payload.get("data", payload)
+    err = data.get("error") if isinstance(data, dict) else None
+    if isinstance(err, dict):
+        return str(err.get("message") or err)[:220]
+    return str(err or data)[:220]
+
+
+def _cancel_any(mcp, text: str) -> None:
+    """Cancel the order the response describes."""
+    oid = _order_id(text)
+    if not oid:
+        print("      (no order id in response; nothing to cancel)")
+        return
+    try:
+        res = mcp.cancel_order(oid)
+        print(f"      cancelled {oid}: {res[:120]}")
+    except MCPError as exc:
+        print(f"      CANCEL FAILED for {oid}: {exc}")
 
 
 def main() -> int:
@@ -321,6 +438,7 @@ def main() -> int:
     print(f"trading host : {TRADING_HOST}")
     print(f"mode         : {'SUBMIT (stages 1-3)' if args.submit else 'READ-ONLY (stages 1-2)'}")
 
+    _load_dotenv()
     try:
         client = AlpacaDataClient()
     except AlpacaError as exc:
