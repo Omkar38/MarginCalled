@@ -235,11 +235,25 @@ def main() -> int:
         max_coverage_ratio=args.coverage,
     )
 
+    # Unbuffered stdout. When output is redirected to a file Python block-buffers
+    # it, so a stalled scanner writes nothing and looks identical to a healthy one
+    # that has not printed yet. Losing a session to that is not worth the buffer.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:
+        pass
+
     scans = 0
+    heartbeats = 0
     while not _stop:
         now = datetime.now()
         if args.market_hours and not _in_market_hours(now):
-            print(f"  {now.strftime('%H:%M:%S')}  outside market hours, sleeping")
+            heartbeats += 1
+            # Only every twelfth idle tick (~1h at the default interval) so an
+            # overnight log stays readable, but silence still means "stalled".
+            if heartbeats % 12 == 1:
+                print(f"  {now.strftime('%Y-%m-%d %H:%M:%S')}  outside market hours, "
+                      f"sleeping (idle tick {heartbeats})")
         else:
             try:
                 scan_once(
