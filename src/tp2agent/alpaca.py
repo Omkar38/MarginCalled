@@ -439,7 +439,13 @@ class AlpacaDataClient:
         """
         chain = ChainSnapshot(
             asof=asof or date.today(),
-            underlying_price=spot if spot is not None else self.spot(underlying),
+            underlying_price=(
+                spot
+                if spot is not None
+                # resolve_spot falls back to put-call parity for index
+                # underlyings, whose spot is absent from Alpaca's market data.
+                else self.resolve_spot(underlying, expiries[0], feed)[0]
+            ),
         )
         census = {
             "snapshots_returned": 0,
@@ -471,6 +477,7 @@ class AlpacaDataClient:
                 if ts and (newest is None or ts > newest):
                     newest = ts
 
+                iv = snap.get("impliedVolatility")
                 chain.add(
                     OptionQuote(
                         symbol=symbol,
@@ -483,6 +490,8 @@ class AlpacaDataClient:
                             bid_size=float(q.get("bs") or 0),
                             ask_size=float(q.get("as") or 0),
                         ),
+                        greeks=dict(snap.get("greeks") or {}),
+                        iv=float(iv) if iv is not None else None,
                     )
                 )
                 census["added_calls" if right == "C" else "added_puts"] += 1

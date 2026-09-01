@@ -78,10 +78,16 @@ class Measurement:
     violation_size: float = 0.0
     missing: tuple[str, ...] = ()
     quotes: dict[str, tuple[float, float]] = field(default_factory=dict)
+    analytics: dict[str, tuple[float, float]] = field(default_factory=dict)  # (delta, iv)
 
     def leg(self, label: str, side: int) -> float:
         """Bid (side=0) or ask (side=1) for leg A/B/C/D; nan when unobserved."""
         pair = self.quotes.get(label)
+        return pair[side] if pair else float("nan")
+
+    def analytic(self, label: str, side: int) -> float:
+        """Delta (side=0) or IV (side=1); nan when unobserved."""
+        pair = self.analytics.get(label)
         return pair[side] if pair else float("nan")
 
     @property
@@ -111,10 +117,15 @@ def remeasure(chain: ChainSnapshot, ep: "Episode") -> Measurement:
         label: (opt.quote.bid, opt.quote.ask)
         for label, opt in zip("ABCD", (A, B, C, D))
     }
+    analytics = {
+        label: (opt.greek("delta"), opt.iv if opt.iv is not None else float("nan"))
+        for label, opt in zip("ABCD", (A, B, C, D))
+    }
     lhs = A.quote.ask * B.quote.ask
     rhs = C.quote.bid * D.quote.bid
     if rhs <= 0:
-        return Measurement(observable=False, missing=("rhs<=0",), quotes=quotes)
+        return Measurement(observable=False, missing=("rhs<=0",), quotes=quotes,
+                           analytics=analytics)
     return Measurement(
         observable=True,
         lhs=lhs,
@@ -122,6 +133,7 @@ def remeasure(chain: ChainSnapshot, ep: "Episode") -> Measurement:
         severity=(rhs - lhs) / rhs,
         violation_size=rhs - lhs,
         quotes=quotes,
+        analytics=analytics,
     )
 
 
@@ -276,6 +288,9 @@ PATH_FIELDS = [
     # lhs and rhs are products and the individual legs cannot be recovered
     # from them, so without these a backtest has entry prices and no exits.
     "A_bid", "A_ask", "B_bid", "B_ask", "C_bid", "C_ask", "D_bid", "D_ask",
+    # Delta and IV at each observation: enough to see how the position's risk
+    # evolved between entry and reversion without carrying the full greek set.
+    "A_delta", "A_iv", "B_delta", "B_iv", "C_delta", "C_iv", "D_delta", "D_iv",
 ]
 
 
@@ -350,6 +365,11 @@ class EpisodeTracker:
                     "|".join(m.missing),
                     *[
                         f"{m.leg(lbl, side):.6f}"
+                        for lbl in "ABCD"
+                        for side in (0, 1)
+                    ],
+                    *[
+                        f"{m.analytic(lbl, side):.6f}"
                         for lbl in "ABCD"
                         for side in (0, 1)
                     ],
@@ -431,9 +451,12 @@ class EpisodeTracker:
                     True, cand.lhs, cand.rhs, severity, cand.violation_size,
                     quotes={
                         lbl: (leg.quote.bid, leg.quote.ask)
-                        for lbl, leg in zip(
-                            "ABCD", (cand.A, cand.B, cand.C, cand.D)
-                        )
+                        for lbl, leg in zip("ABCD", (cand.A, cand.B, cand.C, cand.D))
+                    },
+                    analytics={
+                        lbl: (leg.greek("delta"),
+                              leg.iv if leg.iv is not None else float("nan"))
+                        for lbl, leg in zip("ABCD", (cand.A, cand.B, cand.C, cand.D))
                     },
                 ),
             )

@@ -114,7 +114,25 @@ VIOLATION_FIELDS = [
     "tick_bound", "coverage_ratio", "theory_category", "theory_tradable",
     # Execution-side assessment, recorded but never used to suppress a detection.
     "exec_tradable", "exec_reasons", "min_leg_mid",
+    # Per-leg greeks, implied volatility and quoted sizes at the signal instant.
+    # Alpaca has no historical option data of this kind, so a scan that does not
+    # record them destroys the only copy. These are the inputs the paper's F*
+    # feature set is built from.
+    "A_delta", "A_gamma", "A_theta", "A_vega", "A_rho", "A_iv", "A_bid_size", "A_ask_size", "B_delta", "B_gamma", "B_theta", "B_vega", "B_rho", "B_iv", "B_bid_size", "B_ask_size", "C_delta", "C_gamma", "C_theta", "C_vega", "C_rho", "C_iv", "C_bid_size", "C_ask_size", "D_delta", "D_gamma", "D_theta", "D_vega", "D_rho", "D_iv", "D_bid_size", "D_ask_size",
 ]
+
+
+def _leg_analytics(cand) -> list:
+    """Greeks, IV and quoted sizes for A, B, C, D in field order."""
+    out: list = []
+    for leg in (cand.A, cand.B, cand.C, cand.D):
+        for name in ("delta", "gamma", "theta", "vega", "rho"):
+            value = leg.greeks.get(name)
+            out.append(f"{float(value):.6f}" if value is not None else "")
+        out.append(f"{leg.iv:.6f}" if leg.iv is not None else "")
+        out.append(f"{leg.quote.bid_size:.0f}")
+        out.append(f"{leg.quote.ask_size:.0f}")
+    return out
 
 
 class ScanStore:
@@ -219,6 +237,7 @@ class ScanStore:
                 int(flags.tradable) if flags else "",
                 "; ".join(flags.reasons) if flags else "",
                 f"{flags.min_leg_mid:.4f}" if flags else "",
+                *_leg_analytics(cand),
             ],
         )
 

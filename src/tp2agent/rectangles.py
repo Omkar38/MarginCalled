@@ -105,6 +105,16 @@ class OptionQuote:
     expiry: date
     right: str  # "C" or "P"
     quote: Quote
+    # Greeks and implied volatility as the feed reports them. Carried because
+    # Alpaca has no historical option data of this kind: a scan that discards
+    # them destroys the only copy. These are the raw materials of the paper's
+    # F* feature set - per-leg delta, theta, vega and IV.
+    greeks: dict = field(default_factory=dict)
+    iv: float | None = None
+
+    def greek(self, name: str) -> float:
+        value = self.greeks.get(name)
+        return float(value) if value is not None else float("nan")
 
 
 @dataclass
