@@ -83,11 +83,27 @@ def test_live_key_is_refused():
 
 
 def test_missing_credentials_refused():
+    """Hermetic: empty arguments fall back to the environment, so the
+    environment has to be cleared for this to test what it claims.
+
+    Without this the test passes on a bare machine and fails wherever
+    credentials happen to be exported - which is exactly what happened when the
+    compliance report ran the suite as subprocesses after loading .env.
+    """
+    import os
+
+    saved = {k: os.environ.pop(k, None)
+             for k in ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY",
+                       "ALPACA_API_KEY", "ALPACA_SECRET_KEY")}
     try:
         AlpacaDataClient(key="", secret="")
     except AlpacaError as exc:
         assert "credential" in str(exc).lower()
         return
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
     raise AssertionError("missing credentials must raise")
 
 
