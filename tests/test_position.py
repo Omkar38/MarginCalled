@@ -281,6 +281,47 @@ def test_degenerate_widths_are_rejected():
     assert spec.rejected_reason is not None
 
 
+def test_fractional_quantity_cannot_reach_a_payload():
+    """Options trade in whole contracts. The study's weights are continuous -
+    it says so explicitly - so a fractional weight is a theoretical size, never
+    an order. The boundary refuses it rather than rounding silently."""
+    from tp2agent.position import PositionLeg, Side
+
+    for bad in (1.5, 0.5, 2.0001):
+        leg = PositionLeg("SPY261016C00640000", 640.0, "2026-10-16", Side.BUY, bad, 1.0)
+        try:
+            leg.to_alpaca_leg()
+        except ValueError as exc:
+            assert "whole number of contracts" in str(exc)
+            continue
+        raise AssertionError(f"fractional qty {bad} must be refused")
+
+
+def test_zero_or_negative_quantity_refused():
+    from tp2agent.position import PositionLeg, Side
+
+    for bad in (0, -1):
+        leg = PositionLeg("SPY261016C00640000", 640.0, "2026-10-16", Side.BUY, bad, 1.0)
+        try:
+            leg.to_alpaca_leg()
+        except ValueError as exc:
+            assert ">= 1" in str(exc)
+            continue
+        raise AssertionError(f"qty {bad} must be refused")
+
+
+def test_every_built_position_has_whole_contracts():
+    """The weights are 400:427 style floats; what ships must be integers."""
+    for structure in (Structure.T1, Structure.K2, Structure.FOUR_LEG):
+        spec = build_position(
+            _realistic_candidate(), PositionConfig(structure=structure)
+        )
+        for leg in spec.legs:
+            assert isinstance(leg.ratio_qty, int), (structure, leg.ratio_qty)
+            payload = leg.to_alpaca_leg()
+            assert payload["ratio_qty"].isdigit()
+
+
 def test_alpaca_leg_payload_shape():
     spec = build_position(_candidate(), PositionConfig(structure=Structure.FOUR_LEG))
     for leg in spec.legs:

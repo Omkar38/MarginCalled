@@ -118,7 +118,22 @@ class PositionLeg:
         """Leg payload shape for an Alpaca MLeg order.
 
         Returned as data only. This module never submits anything.
+
+        Quantity is asserted to be a whole positive number here, at the last
+        point before the payload leaves. The source study's weights are
+        continuous and it says so - "position weights can imply fractional
+        contract quantities" - but options trade in whole contracts, so a
+        fractional weight is a theoretical size, never an order. Enforcing it at
+        the boundary means no future change to the weighting can quietly ship a
+        fraction to the broker.
         """
+        if not isinstance(self.ratio_qty, int) or isinstance(self.ratio_qty, bool):
+            raise ValueError(
+                f"ratio_qty must be a whole number of contracts, got "
+                f"{self.ratio_qty!r} ({type(self.ratio_qty).__name__})"
+            )
+        if self.ratio_qty < 1:
+            raise ValueError(f"ratio_qty must be >= 1, got {self.ratio_qty}")
         return {
             "symbol": self.symbol,
             "side": self.side.value,

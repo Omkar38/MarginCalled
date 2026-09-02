@@ -127,6 +127,7 @@ class Trade:
     violation_size: float = 0.0
     settled_at_expiry: bool = False
     resolved: bool = False
+    executable: bool = True   # False for fractional (RATIO) sizing
     note: str = ""
 
     @property
@@ -172,6 +173,7 @@ class Trade:
             "net_pnl": f"{self.net_pnl:.2f}",
             "holding_seconds": f"{self.holding_seconds:.0f}",
             "settled_at_expiry": int(self.settled_at_expiry),
+            "executable": int(self.executable),
             "resolved": int(self.resolved),
             "note": self.note,
         }
@@ -258,12 +260,21 @@ def simulate(
     entry_long = float(violation[f"{long_leg}_ask"])   # we buy
     entry_short = float(violation[f"{short_leg}_bid"])  # we sell
     if cfg.sizing is Sizing.RATIO:
+        # The study's continuous weights. Reported for comparison with the
+        # paper only - options trade in whole contracts, so these quantities
+        # cannot be sent to a broker and the resulting P&L is not achievable.
         qty_long = float(violation[f"{weight_leg}_ask"])
         qty_short = float(violation["C_bid"])
+        trade.note = (trade.note + " | " if trade.note else "") + (
+            "RATIO sizing: fractional contracts, theoretical only, not executable"
+        )
     else:
         qty_long = qty_short = 1.0
 
     trade.qty_long, trade.qty_short = qty_long, qty_short
+    trade.executable = (
+        float(qty_long).is_integer() and float(qty_short).is_integer()
+    )
     trade.entry_long_price, trade.entry_short_price = entry_long, entry_short
     trade.entry_cash = qty_short * entry_short - qty_long * entry_long
 
