@@ -212,6 +212,70 @@ def test_load_env_does_not_override_the_environment():
         os.environ.pop("TP2_TEST_SENTINEL", None)
 
 
+# --------------------------------------------------------------------------
+# A wrong key must be diagnosable, not merely survivable
+# --------------------------------------------------------------------------
+
+
+def test_check_reports_a_missing_key_clearly():
+    ok, detail = LLMNarrator(api_key="").check()
+    assert not ok
+    assert "ANTHROPIC_API_KEY" in detail
+
+
+def test_http_error_bodies_are_parsed_into_the_message():
+    """A bare 401 with a silent template fallback leaves the user with no idea
+    the key is wrong. The API's own message has to survive."""
+    import io
+    import urllib.error
+
+    n = LLMNarrator(api_key="sk-bad")
+    body = json.dumps({"error": {"message": "API key is invalid."}}).encode()
+
+    def boom(req, timeout=None):
+        raise urllib.error.HTTPError(
+            "https://api.anthropic.com/v1/messages", 401, "Unauthorized", {},
+            io.BytesIO(body),
+        )
+
+    import tp2agent.narrator as mod
+
+    saved = mod.urllib.request.urlopen
+    mod.urllib.request.urlopen = boom
+    try:
+        assert n._call("hi") is None
+        assert "401" in n.last_error
+        assert "API key is invalid." in n.last_error
+        assert "check ANTHROPIC_API_KEY" in n.last_error
+    finally:
+        mod.urllib.request.urlopen = saved
+
+
+def test_a_failed_call_still_produces_narration():
+    """The fallback stays: a narration failure must never look like a trading
+    failure. It just must not be silent about why."""
+    n = LLMNarrator(api_key="sk-bad")
+    n._call = lambda prompt: None
+    out = n.record(_rec())
+    assert out and isinstance(out, str)
+
+
+def test_check_is_cheap():
+    """check() must not spend a full narration's tokens proving a key works."""
+    n = LLMNarrator(api_key="sk-x", max_tokens=4000)
+    seen = {}
+
+    def fake(prompt):
+        seen["max_tokens"] = n.max_tokens
+        return "ready"
+
+    n._call = fake
+    ok, _ = n.check()
+    assert ok
+    assert seen["max_tokens"] <= 32, "the probe must cap max_tokens"
+    assert n.max_tokens == 4000, "and must restore the original setting"
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0

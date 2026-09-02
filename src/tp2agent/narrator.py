@@ -194,6 +194,7 @@ class LLMNarrator:
         self.max_records = max_records
         self.fallback = TemplateNarrator()
         self.last_error: str | None = None
+        self.usage: dict = {}
 
     @property
     def available(self) -> bool:
@@ -220,17 +221,60 @@ class LLMNarrator:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 data = json.loads(resp.read().decode())
-            parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
-            text = "".join(parts).strip()
-            if not text:
-                self.last_error = "empty response"
-                return None
-            self.last_error = None
-            return text
-        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, KeyError,
-                TimeoutError, OSError) as exc:
+        except urllib.error.HTTPError as exc:
+            # Read the body. Anthropic returns a JSON error with a specific
+            # message - "invalid x-api-key", "credit balance is too low" - and
+            # swallowing it leaves the caller staring at a bare 401 while the
+            # narration silently falls back to the template. A wrong key must
+            # be diagnosable, not merely survivable.
+            try:
+                body = json.loads(exc.read().decode(errors="replace"))
+                detail = body.get("error", {}).get("message") or str(body)[:200]
+            except Exception:  # noqa: BLE001
+                detail = "no error body"
+            hint = {
+                401: " - check ANTHROPIC_API_KEY in .env",
+                400: " - malformed request or unknown model",
+                404: " - unknown model name",
+                429: " - rate limited; retry shortly",
+            }.get(exc.code, "")
+            self.last_error = f"HTTP {exc.code}: {detail}{hint}"
+            return None
+        except (urllib.error.URLError, json.JSONDecodeError, TimeoutError, OSError) as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
             return None
+
+        try:
+            parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
+        except (AttributeError, TypeError) as exc:
+            self.last_error = f"unexpected response shape: {type(exc).__name__}"
+            return None
+        text = "".join(parts).strip()
+        if not text:
+            self.last_error = f"empty response (stop_reason {data.get('stop_reason')})"
+            return None
+        self.usage = data.get("usage") or {}
+        self.last_error = None
+        return text
+
+    def check(self) -> tuple[bool, str]:
+        """Cheapest possible round trip, to prove the key works.
+
+        Worth its own method: the alternative is discovering a bad key halfway
+        through narrating a session, by which point the fallback has already
+        hidden the failure.
+        """
+        if not self.available:
+            return False, "no ANTHROPIC_API_KEY found (checked the environment and .env)"
+        saved = self.max_tokens
+        self.max_tokens = 16
+        try:
+            out = self._call("Reply with the single word: ready")
+        finally:
+            self.max_tokens = saved
+        if out is None:
+            return False, self.last_error or "unknown error"
+        return True, f"{self.model} responded: {out.strip()[:60]}"
 
     def record(self, r: DecisionRecord) -> str:
         prompt = (

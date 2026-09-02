@@ -28,8 +28,18 @@ def main() -> int:
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--out", default=None, help="write the narration to this file as well")
     ap.add_argument("--last", type=int, default=0, help="narrate only the last N decisions")
+    ap.add_argument("--check", action="store_true",
+                    help="verify the API key with one tiny request, then exit")
     args = ap.parse_args()
     load_env()
+
+    if args.check:
+        n = LLMNarrator(model=args.model)
+        ok, detail = n.check()
+        print(("OK   " if ok else "FAIL ") + detail)
+        if ok and n.usage:
+            print(f"     tokens in {n.usage.get('input_tokens')} out {n.usage.get('output_tokens')}")
+        return 0 if ok else 1
 
     log = AuditLog(Path(args.data_dir) / "decisions.jsonl")
     records = log.read()
