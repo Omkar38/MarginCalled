@@ -45,6 +45,7 @@ from tp2agent.executor import (  # noqa: E402
     Transport,
     build_order,
 )
+from tp2agent.audit import AuditLog, Outcome
 from tp2agent.exits import (  # noqa: E402
     ExitPolicy,
     OpenPosition,
@@ -95,6 +96,31 @@ def _to_theory_rectangle(cand) -> Rectangle:
     )
 
 
+def _determinant(cand) -> dict:
+    """The inequality as it stood at the moment of the decision."""
+    return {
+        "lhs": cand.lhs,
+        "rhs": cand.rhs,
+        "violation_size": cand.violation_size,
+        "normalized_severity": cand.normalized_severity,
+        "tick_bound": cand.tick_bound,
+        "K1": cand.K1, "K2": cand.K2,
+        "K1_adj": cand.K1_adj, "K2_adj": cand.K2_adj,
+        "T1": cand.T1.isoformat(), "T2": cand.T2.isoformat(),
+    }
+
+
+def _leg_quotes(cand) -> dict:
+    """Per-leg quotes as seen. Stored so a decision can be re-derived later
+    without trusting that the feed still says the same thing."""
+    return {
+        name: {"symbol": leg.symbol, "strike": leg.strike,
+               "expiry": leg.expiry.isoformat(),
+               "bid": leg.quote.bid, "ask": leg.quote.ask}
+        for name, leg in (("A", cand.A), ("B", cand.B), ("C", cand.C), ("D", cand.D))
+    }
+
+
 class TradeContext:
     """Turns approved candidates into orders. Off unless --trade is passed.
 
@@ -122,6 +148,10 @@ class TradeContext:
         # Must follow --data-dir, not a hardcoded path, or a test run writes
         # its orders into the live data directory.
         self.log = Path(data_dir) / "orders.jsonl"
+        # The decision log is separate from orders.jsonl on purpose: that file
+        # records what was SENT, which is a survivorship-biased view of the
+        # agent's behaviour. Most candidates are refused and never appear there.
+        self.audit = AuditLog(Path(data_dir) / "decisions.jsonl")
 
     def open(self) -> None:
         if not self.enabled:
@@ -239,6 +269,13 @@ class TradeContext:
                 return
             spec = build_position(cand, config_for(underlying))
             if not spec.is_executable:
+                self.audit.log(
+                    underlying=underlying, episode_key=cand.episode_key,
+                    outcome=Outcome.NOT_EXECUTABLE, stage="position",
+                    theory_category=category.value,
+                    reason=spec.rejected_reason or "no covered whole-contract ratio",
+                    determinant=_determinant(cand), quotes=_leg_quotes(cand),
+                )
                 continue
             decision = evaluate(
                 spec, category, state, limits, datetime.now(), quote_age,
@@ -255,6 +292,17 @@ class TradeContext:
             }
             if not decision.approved:
                 self._write(record)
+                self.audit.log(
+                    underlying=underlying, episode_key=cand.episode_key,
+                    outcome=Outcome.RISK_REJECTED, stage="risk",
+                    theory_category=category.value,
+                    denomination=self.structure.name,
+                    reason="; ".join(
+                        f"{c.value}: {m}" for c, m in decision.rejections
+                    ) or "risk gates refused",
+                    determinant=_determinant(cand), quotes=_leg_quotes(cand),
+                    risk=decision.to_record(),
+                )
                 continue
             plan = build_order(spec, self.policy)
             record["order"] = plan.to_record()
@@ -270,11 +318,31 @@ class TradeContext:
                         oid = None
                 if oid:
                     self.pending[cand.episode_key] = {"order_id": oid, "spec": spec}
+                self.audit.log(
+                    underlying=underlying, episode_key=cand.episode_key,
+                    outcome=Outcome.TRADED, stage="execution",
+                    theory_category=category.value,
+                    denomination=self.structure.name,
+                    reason=("dry run - not sent to the broker" if self.dry_run
+                            else "submitted via MCP"),
+                    determinant=_determinant(cand), quotes=_leg_quotes(cand),
+                    risk=decision.to_record(), order=plan.to_record(),
+                    broker={"order_id": oid, "status": "dry_run" if self.dry_run else "submitted"},
+                )
                 print(f"      ORDER {'(dry-run) ' if self.dry_run else ''}"
                       f"{self.structure.value} {cand.episode_key} "
                       f"limit {plan.limit_price:+.2f}")
             except Exception as exc:  # noqa: BLE001
                 record["result"] = {"error": f"{type(exc).__name__}: {exc}"}
+                self.audit.log(
+                    underlying=underlying, episode_key=cand.episode_key,
+                    outcome=Outcome.ORDER_FAILED, stage="execution",
+                    theory_category=category.value,
+                    denomination=self.structure.name,
+                    reason=f"{type(exc).__name__}: {exc}",
+                    determinant=_determinant(cand), quotes=_leg_quotes(cand),
+                    risk=decision.to_record(), order=plan.to_record(),
+                )
                 print(f"      ORDER FAILED: {exc}")
             self._write(record)
 
@@ -345,6 +413,31 @@ def scan_once(
             n_tradable += 1
             if gate.is_tradable:
                 gated.append((cand, gate.category))
+            elif trader is not None and trader.enabled:
+                # Executable and liquid, refused purely on theory. This is the
+                # most informative refusal the agent makes, so it is recorded
+                # even though it never reaches the order path.
+                trader.audit.log(
+                    underlying=underlying, episode_key=cand.episode_key,
+                    outcome=Outcome.THEORY_BLOCKED, stage="theory_gate",
+                    theory_category=gate.category.value,
+                    reason="; ".join(gate.reasons) or "the gate could not certify no early exercise",
+                    determinant=_determinant(cand), quotes=_leg_quotes(cand),
+                )
+        elif trader is not None and trader.enabled:
+            # Detected, but not executable on the terms quoted. Recorded so the
+            # log shows the whole funnel: without this the most common outcome -
+            # a real violation we cannot trade - leaves no trace at all, and a
+            # scan that found 12 violations and sent 0 orders looks unexplained.
+            trader.audit.log(
+                underlying=underlying, episode_key=cand.episode_key,
+                outcome=Outcome.NOT_EXECUTABLE, stage="tradability",
+                theory_category=gate.category.value,
+                reason="; ".join(flags.reasons) or "failed the execution screen",
+                determinant=_determinant(cand), quotes=_leg_quotes(cand),
+                extra={"coverage_ratio": flags.coverage_ratio,
+                       "min_leg_mid": flags.min_leg_mid},
+            )
         store.record_violation(
             ts, feed.feed, spot, cand, gate.category.value, gate.is_tradable, flags
         )
