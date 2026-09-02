@@ -186,8 +186,15 @@ class LLMNarrator:
 
     def __init__(self, api_key: str | None = None, model: str = DEFAULT_MODEL,
                  max_tokens: int = 1200, timeout: int = 60,
-                 max_records: int = 120) -> None:
+                 max_records: int = 120, workspace_id: str | None = None) -> None:
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        # Identity-linked keys must name the workspace they act in; the API
+        # rejects them with a 400 otherwise. Optional, because ordinary keys
+        # must not send the header.
+        self.workspace_id = (
+            workspace_id if workspace_id is not None
+            else os.environ.get("ANTHROPIC_WORKSPACE_ID", "")
+        )
         self.model = model
         self.max_tokens = max_tokens
         self.timeout = timeout
@@ -210,14 +217,14 @@ class LLMNarrator:
             "system": self.SYSTEM,
             "messages": [{"role": "user", "content": prompt}],
         }).encode()
-        req = urllib.request.Request(
-            API_URL, data=body, method="POST",
-            headers={
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-        )
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        if self.workspace_id:
+            headers["anthropic-workspace-id"] = self.workspace_id
+        req = urllib.request.Request(API_URL, data=body, method="POST", headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 data = json.loads(resp.read().decode())
@@ -238,6 +245,9 @@ class LLMNarrator:
                 404: " - unknown model name",
                 429: " - rate limited; retry shortly",
             }.get(exc.code, "")
+            if "workspace" in detail.lower() and not self.workspace_id:
+                hint = (" - this key is identity-linked; add "
+                        "ANTHROPIC_WORKSPACE_ID=<id> to .env")
             self.last_error = f"HTTP {exc.code}: {detail}{hint}"
             return None
         except (urllib.error.URLError, json.JSONDecodeError, TimeoutError, OSError) as exc:

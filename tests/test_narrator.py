@@ -276,6 +276,57 @@ def test_check_is_cheap():
     assert n.max_tokens == 4000, "and must restore the original setting"
 
 
+def test_workspace_header_is_sent_only_when_configured():
+    """Identity-linked keys are rejected without anthropic-workspace-id, and
+    ordinary keys must not receive the header at all."""
+    import io
+    import urllib.error
+
+    import tp2agent.narrator as mod
+
+    captured = {}
+
+    def fake(req, timeout=None):
+        captured["headers"] = dict(req.headers)
+        raise urllib.error.HTTPError("u", 401, "x", {}, io.BytesIO(b"{}"))
+
+    saved = mod.urllib.request.urlopen
+    mod.urllib.request.urlopen = fake
+    try:
+        LLMNarrator(api_key="sk-x", workspace_id="")._call("hi")
+        keys = {k.lower() for k in captured["headers"]}
+        assert "anthropic-workspace-id" not in keys
+
+        LLMNarrator(api_key="sk-x", workspace_id="wrkspc_123")._call("hi")
+        hdrs = {k.lower(): v for k, v in captured["headers"].items()}
+        assert hdrs.get("anthropic-workspace-id") == "wrkspc_123"
+    finally:
+        mod.urllib.request.urlopen = saved
+
+
+def test_identity_linked_error_names_the_missing_variable():
+    import io
+    import urllib.error
+
+    import tp2agent.narrator as mod
+
+    body = json.dumps({"error": {"message":
+        "anthropic-workspace-id is required when authenticating with an "
+        "identity-linked API key"}}).encode()
+
+    def fake(req, timeout=None):
+        raise urllib.error.HTTPError("u", 400, "x", {}, io.BytesIO(body))
+
+    saved = mod.urllib.request.urlopen
+    mod.urllib.request.urlopen = fake
+    try:
+        n = LLMNarrator(api_key="sk-x", workspace_id="")
+        n._call("hi")
+        assert "ANTHROPIC_WORKSPACE_ID" in n.last_error
+    finally:
+        mod.urllib.request.urlopen = saved
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
