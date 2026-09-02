@@ -448,6 +448,46 @@ def test_structure_for_refuses_to_default_after_an_abstention():
     raise AssertionError("an abstention must not silently become a structure")
 
 
+def test_t1_max_loss_is_the_debit():
+    """T1 is a bull call spread: K1 < K2~, so the debit is the whole risk."""
+    from tp2agent.position import PositionConfig, build_position
+
+    c = _realistic_candidate()
+    spec = build_position(c, PositionConfig(structure=Structure.T1))
+    debit = c.A.quote.ask - c.D.quote.bid
+    assert abs(spec.max_loss - max(debit, 0.0) * 100) < 1e-9
+
+
+def test_k2_max_loss_includes_the_strike_gap():
+    """K2 is a diagonal. When K2~ rounds below K2 the package loses
+    (K2 - K2~) at T1 on top of the debit, and a max loss that is understated
+    is the one number a risk cap cannot tolerate."""
+    from dataclasses import replace as _replace
+
+    from tp2agent.position import PositionConfig, build_position
+
+    c = _realistic_candidate()
+    # Force a one-point gap between the long B strike and the short D strike.
+    c = _replace(c, D=_replace(c.D, strike=c.B.strike - 1.0))
+    spec = build_position(c, PositionConfig(structure=Structure.K2))
+    debit = c.B.quote.ask - c.D.quote.bid
+    assert abs(spec.max_loss - (max(debit, 0.0) + 1.0) * 100) < 1e-9, spec.max_loss
+
+
+def test_k2_calendar_max_loss_is_just_the_debit():
+    """With K2~ == K2 the diagonal collapses to a calendar spread and the
+    debit is again the whole risk - the common case, 96.8% of SPY rectangles."""
+    from dataclasses import replace as _replace
+
+    from tp2agent.position import PositionConfig, build_position
+
+    c = _realistic_candidate()
+    c = _replace(c, D=_replace(c.D, strike=c.B.strike))
+    spec = build_position(c, PositionConfig(structure=Structure.K2))
+    debit = c.B.quote.ask - c.D.quote.bid
+    assert abs(spec.max_loss - max(debit, 0.0) * 100) < 1e-9
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0

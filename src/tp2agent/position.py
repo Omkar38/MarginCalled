@@ -443,13 +443,25 @@ def build_position(
             long_leg, label = B, "K2"
 
         debit = long_leg.quote.ask - D.quote.bid
+        # If the long strike sits ABOVE the short strike the package can lose
+        # more than the debit. That never happens for T1, where K1 < K2~ makes
+        # it a bull call spread capped at the debit, but K2 is a diagonal: it
+        # buys B at K2 and shorts D at K2~ <= K2. At T1 with S large the short
+        # pays (S - K2~) while the long is worth about (S - K2), so the package
+        # settles at -(K2 - K2~) on top of the debit.
+        #
+        # Usually zero - rounding K2~ up to a listed strike lands it back on K2
+        # in 96.8% of observed SPY rectangles, which makes K2 a pure calendar
+        # spread - but it is $100 per contract when it is not, and a max loss
+        # that is understated is the one number a risk cap cannot tolerate.
+        strike_gap = max(long_leg.strike - D.strike, 0.0)
         spec.legs = [
             PositionLeg(long_leg.symbol, long_leg.strike,
                         long_leg.expiry.isoformat(), Side.BUY, 1, long_leg.quote.ask),
             PositionLeg(D.symbol, D.strike, D.expiry.isoformat(), Side.SELL, 1, D.quote.bid),
         ]
         spec.entry_cash = -debit * CONTRACT_MULTIPLIER
-        spec.max_loss = max(debit, 0.0) * CONTRACT_MULTIPLIER
+        spec.max_loss = (max(debit, 0.0) + strike_gap) * CONTRACT_MULTIPLIER
         # For T1 both legs share an expiry and K1 < K2~, so the long lower strike
         # covers the short higher one. For K2 the long is later-dated and higher
         # struck, which also caps the short.
