@@ -308,6 +308,43 @@ python3 scripts/narrate.py --data-dir data/SPY --llm --out reports/SPY_narration
 
 ---
 
+## Running it
+
+```bash
+caffeinate -ims python3 -u scripts/run_scanner.py \
+    --underlying SPY --interval 300 --market-hours \
+    --min-dte 0 --max-dte 400 --max-expiries 40 --trade
+```
+
+Identical for SPY, SPX and XSP. Add `--live-orders` to stop dry-running.
+
+**Scan the whole expiry universe.** The CLI defaults (`--min-dte 30
+--max-dte 150 --max-expiries 3`) look harmless and are not: they were costing
+roughly 44x the SPY signal and 5x the SPX, and `--min-dte 30` in particular
+excluded every SPY expiry inside the dividend horizon, which is exactly the set
+the theory gate can actually resolve. Narrowing the date range to work around a
+gate is the wrong instinct - the gate already filters correctly, and the
+rectangles it refuses are still worth recording.
+
+One scan of the full universe, per underlying:
+
+| | expiries | violations | executable | risk-refused | orders |
+|---|---|---|---|---|---|
+| SPY | 29 | 265 | 63 | 0 | 2 |
+| SPX | 13 | 796 | 437 | 35 | 5 (capped) |
+| XSP | 36 | 155 | 58 | 0 | 5 (capped) |
+
+Cost is 25-33 seconds per scan against a 300-second interval, so the full
+universe is affordable and the narrow default bought nothing.
+
+**XSP is not redundant with SPX.** It is the same S&P 500 index at one tenth the
+notional, which changes its risk profile entirely rather than duplicating it:
+SPX had 35 candidates refused on `max_loss_per_trade` in a single scan and XSP
+had none, because a tenth-size contract sits inside the per-trade cap where the
+full-size one does not.
+
+---
+
 ## The funnel
 
 ```
