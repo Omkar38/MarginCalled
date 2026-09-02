@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from tp2agent.audit import AuditLog  # noqa: E402
+from tp2agent.env import load_env  # noqa: E402
 from tp2agent.narrator import DEFAULT_MODEL, LLMNarrator, TemplateNarrator  # noqa: E402
 
 
@@ -28,6 +29,7 @@ def main() -> int:
     ap.add_argument("--out", default=None, help="write the narration to this file as well")
     ap.add_argument("--last", type=int, default=0, help="narrate only the last N decisions")
     args = ap.parse_args()
+    load_env()
 
     log = AuditLog(Path(args.data_dir) / "decisions.jsonl")
     records = log.read()

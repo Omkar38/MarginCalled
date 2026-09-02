@@ -25,13 +25,9 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 def _load_env() -> None:
-    env = ROOT / ".env"
-    if not env.exists():
-        return
-    for line in env.read_text().splitlines():
-        if "=" in line and not line.strip().startswith("#"):
-            k, _, v = line.strip().partition("=")
-            os.environ.setdefault(k, v.strip().strip("\"'"))
+    from tp2agent.env import load_env
+
+    load_env()
 
 
 def _mark(ok: bool | None) -> str:

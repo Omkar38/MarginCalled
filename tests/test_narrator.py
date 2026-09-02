@@ -190,6 +190,28 @@ def test_narrate_session_writes_beside_the_log_without_touching_it():
         assert lg.path.read_bytes() == before, "narrating must not modify the evidence"
 
 
+def test_narrate_cli_loads_dotenv():
+    """narrate.py read ANTHROPIC_API_KEY from the environment but never loaded
+    the file the key is documented to live in, so pasting the key where the
+    comments say would have had no effect and the narrator would have gone on
+    silently using its template."""
+    src = (Path(__file__).resolve().parents[1] / "scripts" / "narrate.py").read_text()
+    assert "load_env" in src, "the narrate CLI must load .env"
+
+
+def test_load_env_does_not_override_the_environment():
+    import os
+
+    from tp2agent.env import load_env
+
+    os.environ["TP2_TEST_SENTINEL"] = "explicit"
+    try:
+        load_env()
+        assert os.environ["TP2_TEST_SENTINEL"] == "explicit"
+    finally:
+        os.environ.pop("TP2_TEST_SENTINEL", None)
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
