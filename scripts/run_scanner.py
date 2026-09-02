@@ -56,7 +56,7 @@ from tp2agent.exits import (  # noqa: E402
 )
 from tp2agent.mcp_client import TRADING_TOOLSETS, AlpacaMCPClient  # noqa: E402
 from tp2agent.position import build_position, config_for, structure_for  # noqa: E402
-from tp2agent.risk import AccountState, RiskLimits, evaluate  # noqa: E402
+from tp2agent.risk import AccountState, RiskLimits, evaluate, revalidate  # noqa: E402
 from tp2agent.store import MarginSummary, ScanStore  # noqa: E402
 from tp2agent.theory_gate import (  # noqa: E402
     Contract,
@@ -333,13 +333,27 @@ class TradeContext:
                     determinant=_determinant(cand), quotes=_leg_quotes(cand),
                 )
                 continue
-            # Re-price immediately before the risk gates, so revalidation tests
-            # the market as it is now rather than as the scan found it.
-            fresh = _reprice(cand, self.client, self.feed)
+            # Two passes, because re-pricing costs an API call per candidate.
+            #
+            # The first pass runs every gate that needs no network, using the
+            # scan's own quotes so revalidation is trivially satisfied. Only a
+            # candidate that clears all of those is worth re-pricing, and there
+            # are a handful of those per scan rather than hundreds.
+            #
+            # Doing it the other way round - re-pricing every candidate up front
+            # - issued 718 snapshot requests in one SPX scan, was rate limited,
+            # and the failures came back as VIOLATION_GONE. That reads as "the
+            # edge evaporated" when it actually means "we never asked". 161 of
+            # 369 gone-refusals in the first live cycle were this, not a real
+            # signal.
             decision = evaluate(
                 spec, category, state, limits, datetime.now(), quote_age,
-                detected=cand, fresh=fresh,
+                detected=cand, fresh=cand,
             )
+            if decision.approved:
+                fresh = _reprice(cand, self.client, self.feed)
+                revalidate(cand, fresh, limits, decision)
+                decision.approved = not decision.rejections
             record = {
                 "ts": ts.isoformat(timespec="seconds"),
                 "underlying": underlying,
