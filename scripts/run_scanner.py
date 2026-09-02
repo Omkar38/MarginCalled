@@ -45,6 +45,13 @@ from tp2agent.executor import (  # noqa: E402
     Transport,
     build_order,
 )
+from tp2agent.exits import (  # noqa: E402
+    ExitPolicy,
+    OpenPosition,
+    PositionRegistry,
+    build_close_legs,
+    should_exit,
+)
 from tp2agent.mcp_client import TRADING_TOOLSETS, AlpacaMCPClient  # noqa: E402
 from tp2agent.position import build_position, config_for, structure_for  # noqa: E402
 from tp2agent.risk import AccountState, RiskLimits, evaluate  # noqa: E402
@@ -109,6 +116,9 @@ class TradeContext:
         self.sent = 0
         self.mcp = None
         self.executor = None
+        self.registry = PositionRegistry(Path(data_dir) / "positions.jsonl")
+        self.pending: dict[str, dict] = {}
+        self.exit_policy = ExitPolicy()
         # Must follow --data-dir, not a hardcoded path, or a test run writes
         # its orders into the live data directory.
         self.log = Path(data_dir) / "orders.jsonl"
@@ -127,6 +137,84 @@ class TradeContext:
             self.mcp.stop()
             self.mcp = None
 
+    def reconcile(self, ts) -> None:
+        """Turn accepted orders into recorded positions.
+
+        An accepted order is not a position. Until it fills we owe nothing, and
+        treating acceptance as ownership would have the exit logic trying to
+        close something that does not exist.
+        """
+        if self.executor is None:
+            return
+        for pos in list(self.registry.positions.values()):
+            if not pos.is_open or pos.close_order_id:
+                continue
+        # Any order we sent that has since filled becomes a position.
+        for episode_id, pending in list(self.pending.items()):
+            st, order = self.executor.order(pending["order_id"])
+            if st != 200:
+                continue
+            status = order.get("status")
+            if status == "filled":
+                legs = pending["spec"].legs
+                long_leg = next(l for l in legs if l.side.value == "buy")
+                short_leg = next(l for l in legs if l.side.value == "sell")
+                self.registry.add(OpenPosition(
+                    episode_id=episode_id,
+                    underlying=self.underlying,
+                    denomination=self.structure.name,
+                    order_id=pending["order_id"],
+                    opened_at=ts,
+                    long_symbol=long_leg.symbol,
+                    short_symbol=short_leg.symbol,
+                    long_expiry=date.fromisoformat(long_leg.expiry),
+                    short_expiry=date.fromisoformat(short_leg.expiry),
+                    entry_long_price=long_leg.entry_price,
+                    entry_short_price=short_leg.entry_price,
+                ))
+                print(f"      FILLED {episode_id} -> position recorded")
+                del self.pending[episode_id]
+            elif status in ("canceled", "expired", "rejected"):
+                del self.pending[episode_id]
+
+    def manage_exits(self, ts, tracker) -> None:
+        """Close positions whose thesis resolved, timed out, or hit the deadline."""
+        if self.executor is None:
+            return
+        for pos in self.registry.open_positions():
+            ep = tracker.episodes.get(pos.episode_id) if tracker else None
+            decision = should_exit(pos, ep.status if ep else None, ts,
+                                   self.exit_policy)
+            if not decision.should_close:
+                continue
+            legs = build_close_legs(pos)
+            shade = (self.exit_policy.deadline_shade_spreads if decision.urgent
+                     else self.exit_policy.shade_spreads)
+            body = {
+                "qty": str(pos.qty), "type": "limit", "time_in_force": "day",
+                "order_class": "mleg",
+                # Closing a debit spread is a credit to us; shade against the
+                # indicative quote unless the deadline makes price secondary.
+                "limit_price": f"{-(pos.entry_long_price - pos.entry_short_price) + shade:.2f}",
+                "legs": legs,
+            }
+            try:
+                out = self.mcp.place_option_order(body) if not self.dry_run else "dry-run"
+                oid = None
+                if not self.dry_run:
+                    try:
+                        oid = json.loads(out).get("data", {}).get("id")
+                    except Exception:  # noqa: BLE001
+                        oid = None
+                self.registry.close(pos.episode_id, oid, decision.reason.value, ts)
+                print(f"      EXIT {'(dry-run) ' if self.dry_run else ''}"
+                      f"{pos.episode_id} — {decision.reason.value}: {decision.detail[:70]}")
+                self._write({"ts": ts.isoformat(timespec="seconds"),
+                             "event": "exit", "position": pos.to_record(),
+                             "decision": decision.to_record()})
+            except Exception as exc:  # noqa: BLE001
+                print(f"      EXIT FAILED {pos.episode_id}: {exc}")
+
     def consider(self, ts, underlying, gated, quote_age, spot) -> None:
         if not self.enabled or self.executor is None:
             return
@@ -136,6 +224,7 @@ class TradeContext:
         acct = self.client.account()
         equity = float(acct.get("equity", 0) or 0)
         held = {p.get("symbol") for p in (self.executor.positions() or [])}
+        held |= self.registry.held_symbols()
         state = AccountState(
             equity=equity,
             starting_equity=equity,
@@ -173,6 +262,14 @@ class TradeContext:
                 result = self.executor.submit(plan, decision, dry_run=self.dry_run)
                 record["result"] = result
                 self.sent += 1
+                oid = None
+                if not self.dry_run:
+                    try:
+                        oid = json.loads(result.get("response", "{}")).get("data", {}).get("id")
+                    except Exception:  # noqa: BLE001
+                        oid = None
+                if oid:
+                    self.pending[cand.episode_key] = {"order_id": oid, "spec": spec}
                 print(f"      ORDER {'(dry-run) ' if self.dry_run else ''}"
                       f"{self.structure.value} {cand.episode_key} "
                       f"limit {plan.limit_price:+.2f}")
@@ -256,8 +353,11 @@ def scan_once(
     if tracker is not None:
         ep_stats = tracker.observe(ts, chain, episodes, categories)
 
-    if trader is not None and gated:
-        trader.consider(ts, underlying, gated, age, spot)
+    if trader is not None and trader.enabled:
+        trader.reconcile(ts)
+        trader.manage_exits(ts, tracker)
+        if gated:
+            trader.consider(ts, underlying, gated, age, spot)
 
     closest = summary.maximum if summary.count else float("nan")
     print(
