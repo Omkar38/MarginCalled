@@ -189,12 +189,27 @@ def build_order(
         f"least this much better than the indicative quote implied."
     )
     if clamped:
-        plan.notes.append(
-            f"shade clamped to {policy.max_shade_net_fraction:.0%} of the "
-            f"{abs(net):.4f} net; one full spread would have been "
-            f"{policy.shade_spreads * spread:.4f} and would have inverted the "
-            f"package's sign, making the order unfillable rather than cautious."
-        )
+        raw = max(policy.shade_spreads * spread, policy.min_shade_abs)
+        # Distinguish the two reasons the clamp fires. It is a CEILING, so it
+        # triggers whenever the raw shade exceeds the configured fraction of
+        # the net - far more often than an actual sign inversion, which needs
+        # the raw shade to exceed the whole net. Claiming inversion either way
+        # puts a false statement in the audit record.
+        if raw > abs(net):
+            plan.notes.append(
+                f"shade clamped to {policy.max_shade_net_fraction:.0%} of the "
+                f"{abs(net):.4f} net; the raw {raw:.4f} exceeds the net itself "
+                f"and would have inverted the package's sign, making the order "
+                f"unfillable rather than cautious."
+            )
+        else:
+            plan.notes.append(
+                f"shade clamped from {raw:.4f} to {shade:.4f}, the "
+                f"{policy.max_shade_net_fraction:.0%} ceiling on the "
+                f"{abs(net):.4f} net. The raw shade would not have inverted the "
+                f"package, only demanded {raw / abs(net):.0%} better than the "
+                f"quote implied."
+            )
     if is_debit and limit <= 0:
         plan.notes.append(
             "shade exceeds the debit; the limit is now a credit and will almost "

@@ -292,6 +292,31 @@ def test_credit_packages_keep_their_sign_too():
         assert plan.limit_price <= plan.indicative_net, "a credit must not shrink"
 
 
+def test_clamp_note_does_not_claim_inversion_when_none_would_occur():
+    """The clamp is a ceiling, so it fires far more often than a real sign
+    inversion. A live order recorded "would have inverted the package's sign"
+    for a net of 4.07 against a 3.50 spread, where the unclamped limit would
+    have been +0.57 - still a debit. That is a false statement in an audit
+    record."""
+    from tp2agent.executor import LimitPolicy, build_order
+
+    plan = build_order(_spec(), LimitPolicy(shade_spreads=0.75))
+    raw = 0.75 * plan.package_spread
+    notes = " ".join(plan.notes)
+    if "clamped" in notes and raw <= abs(plan.indicative_net):
+        assert "would not have inverted" in notes, notes
+        assert "and would have inverted" not in notes
+
+
+def test_clamp_note_does_claim_inversion_when_one_would_occur():
+    from tp2agent.executor import LimitPolicy, build_order
+
+    plan = build_order(_spec(), LimitPolicy(shade_spreads=50.0))
+    notes = " ".join(plan.notes)
+    assert "clamped" in notes
+    assert "would have inverted the package's sign" in notes
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
