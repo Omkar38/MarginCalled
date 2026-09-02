@@ -274,12 +274,24 @@ def main() -> int:
     writeup = (ROOT / "WRITEUP.md").exists()
     rows.append(("One-page write-up (AI logic, risk gates, Alpaca infrastructure)", writeup))
     ai_ok, ai_lines = ai_evidence()
-    rows.append(("AI components actually running (see section 4)", ai_ok))
 
     L.append("| requirement | status |")
     L.append("|---|---|")
     for name, ok in rows:
         L.append(f"| {name} | **{_mark(ok)}** |")
+    L += [
+        "",
+        "Verbatim from the published rules: *\"Projects must use Alpaca\'s Trading API and "
+        "either its MCP server or CLI\"*, *\"Strategies must incorporate options trading\"*, "
+        "*\"Final submissions require a new dedicated Alpaca paper trading account\"*.",
+        "",
+        "The rules mandate **no LLM, no generative model and no particular AI provider**. "
+        "The layers below are reported for transparency, not because any of them is "
+        "required; an unexercised one is labelled so rather than described as if it ran.",
+        "",
+        "Judging is on **P&L performance, technology implementation, creativity and "
+        "originality, and presentation and execution**.",
+    ]
     L += ["", "---", "", "## 1. Alpaca infrastructure (MCP)", ""] + mcp_lines
     L += ["", "---", "", "## 2. The competition account", ""] + acct_lines
     L += ["", "---", "", "## 3. Options strategy", "",
@@ -305,8 +317,10 @@ def main() -> int:
               "| suite | result |", "|---|---|"] + test_rows
 
     L += ["", "---", "", "## Not yet met", ""]
-    missing = [n for n, ok in rows if ok is False] + [
-        f"{n} (partial)" for n, ok in rows if ok is None]
+    missing = [n for n, ok in rows if ok is False]
+    if ai_ok is not True:
+        missing.append("(optional, not required by the rules) AI layers not all running "
+                       "- see section 4")
     if missing:
         for m in missing:
             L.append(f"- {m}")
