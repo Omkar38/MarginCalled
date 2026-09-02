@@ -191,6 +191,26 @@ def test_injected_violation_is_detected():
     assert cand.violation_size > 0
     assert cand.rhs > cand.lhs
     assert cand.normalized_severity > 0
+    # Pin the study's convention: severity / (lhs + rhs), not severity / rhs.
+    # This is a model input, so the denominator is not a matter of taste - the
+    # selector was trained on this exact quantity.
+    expected = (cand.rhs - cand.lhs) / (cand.lhs + cand.rhs)
+    assert abs(cand.normalized_severity - expected) < 1e-12, (
+        f"normalized_severity must divide by the SUM of the products; "
+        f"got {cand.normalized_severity}, expected {expected}"
+    )
+    assert cand.normalized_severity < cand.severity_over_rhs, (
+        "the study's normalisation is strictly smaller than the /rhs form"
+    )
+
+
+def test_severity_normalisation_preserves_ranking():
+    """Both conventions are strictly decreasing in lhs/rhs, so switching
+    denominators must not reorder candidates - dedup and top-N are unaffected."""
+    pairs = [(100.0, 102.0), (1.0, 1.5), (400.0, 401.0), (10.0, 12.0), (50.0, 50.5)]
+    study = sorted(pairs, key=lambda p: (p[1] - p[0]) / (p[0] + p[1]), reverse=True)
+    over_rhs = sorted(pairs, key=lambda p: (p[1] - p[0]) / p[1], reverse=True)
+    assert study == over_rhs
 
 
 def test_marginal_violation_below_tick_bound_is_rejected():

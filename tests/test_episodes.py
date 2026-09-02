@@ -30,10 +30,21 @@ T0 = datetime(2026, 8, 31, 10, 0, 0)
 
 
 def _cand(severity: float = 0.05):
-    """A candidate whose normalized severity is controllable."""
+    """A candidate whose normalized severity is controllable.
+
+    Solved for the study's convention, severity = (rhs - lhs) / (lhs + rhs):
+
+        (rhs - lhs) / (lhs + rhs) = s   =>   lhs = rhs * (1 - s) / (1 + s)
+
+    lhs and violation_size are both set so the three fields stay mutually
+    consistent (violation_size == rhs - lhs). The previous fixture set only
+    violation_size, as `severity * rhs`, which both hard-coded the old /rhs
+    convention and left lhs contradicting violation_size.
+    """
     c = _realistic_candidate()
     rhs = c.rhs
-    return replace(c, violation_size=severity * rhs)
+    lhs = rhs * (1.0 - severity) / (1.0 + severity)
+    return replace(c, lhs=lhs, violation_size=rhs - lhs)
 
 
 def _tracker(tmp: Path, revert_after: int = 2) -> EpisodeTracker:

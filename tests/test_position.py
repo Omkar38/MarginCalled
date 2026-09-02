@@ -340,6 +340,114 @@ def test_record_is_json_serialisable():
     assert "coverage_ratio" in text
 
 
+
+def _scored_candidate():
+    """A candidate carrying greeks and IV on all four legs.
+
+    _realistic_candidate() deliberately omits them, which is why the selector
+    abstains on it - that is the correct behaviour, not a fixture convenience.
+    """
+    from dataclasses import replace as _replace
+
+    c = _realistic_candidate()
+    def enrich(o, d, th, v, iv):
+        return _replace(o, greeks={"delta": d, "theta": th, "vega": v}, iv=iv)
+    return _replace(
+        c,
+        A=enrich(c.A, 0.55, -0.11, 0.21, 0.20),
+        B=enrich(c.B, 0.45, -0.12, 0.22, 0.24),
+        C=enrich(c.C, 0.50, -0.13, 0.23, 0.22),
+        D=enrich(c.D, 0.40, -0.14, 0.24, 0.26),
+    )
+
+
+# --------------------------------------------------------------------------
+# Denomination selection and abstention
+# --------------------------------------------------------------------------
+
+
+def test_choice_is_indexable_for_backwards_compatibility():
+    from tp2agent.position import Choice
+
+    c = Choice(Structure.T1, "because")
+    assert c[0] is Structure.T1 and c[1] == "because"
+    assert not c.abstained
+
+
+def test_abstention_is_expressible():
+    from tp2agent.position import Choice
+
+    c = Choice(None, "below threshold")
+    assert c.abstained and c.structure is None
+
+
+def test_model_selector_picks_the_higher_probability():
+    from tp2agent.position import ModelDenominationSelector
+
+    seen = []
+
+    def scorer(vec):
+        seen.append(len(vec))
+        # K2 is scored second; give it the higher probability.
+        return 0.60 if len(seen) == 2 else 0.55
+
+    sel = ModelDenominationSelector(scorer, min_probability=0.5)
+    c = sel.choose("SPY", _scored_candidate(), 645.0)
+    assert c.structure is Structure.K2, c.reason
+    assert seen == [46, 46], "one 46-feature vector per denomination"
+    assert c.score_map == {"T1": 0.55, "K2": 0.60}
+
+
+def test_model_selector_abstains_below_threshold():
+    """The study's rule: trade the better denomination only if it clears 0.5."""
+    from tp2agent.position import ModelDenominationSelector
+
+    sel = ModelDenominationSelector(lambda v: 0.42, min_probability=0.5)
+    c = sel.choose("SPY", _scored_candidate(), 645.0)
+    assert c.abstained
+    assert "below the 0.50 threshold" in c.reason
+
+
+def test_model_selector_abstains_when_features_cannot_be_built():
+    """A missing greek means we do not know what we would be scoring; guessing
+    T1 there would present an absence of information as a prediction."""
+    from tp2agent.position import ModelDenominationSelector
+
+    cand = _scored_candidate()
+    cand.D.greeks.pop("vega", None)
+    sel = ModelDenominationSelector(lambda v: 0.99, min_probability=0.5)
+    c = sel.choose("SPY", cand, 645.0)
+    assert c.abstained
+    assert "features unavailable" in c.reason
+
+
+def test_model_selector_does_not_score_spx():
+    """Only T1 is submittable on SPX, so there is nothing to choose between and
+    the model must not be consulted."""
+    from tp2agent.position import ModelDenominationSelector
+
+    def scorer(vec):
+        raise AssertionError("the model must not be called when only one denomination is allowed")
+
+    c = ModelDenominationSelector(scorer).choose("SPX", _realistic_candidate(), 6400.0)
+    assert c.structure is Structure.T1
+    assert not c.abstained
+
+
+def test_structure_for_refuses_to_default_after_an_abstention():
+    """structure_for cannot represent "no trade"; it must raise rather than
+    silently convert a stand-down into a position."""
+    from tp2agent.position import ModelDenominationSelector, structure_for
+
+    sel = ModelDenominationSelector(lambda v: 0.1, min_probability=0.5)
+    try:
+        structure_for("SPY", sel, _realistic_candidate(), 645.0)
+    except ValueError as exc:
+        assert "abstained" in str(exc)
+        return
+    raise AssertionError("an abstention must not silently become a structure")
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0

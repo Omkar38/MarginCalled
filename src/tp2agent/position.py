@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import NamedTuple
 from math import gcd
 
 from .rectangles import RectangleCandidate
@@ -247,33 +248,116 @@ def allowed_denominations(underlying: str) -> tuple[Structure, ...]:
     return (Structure.T1, Structure.K2)
 
 
+class Choice(NamedTuple):
+    """A denomination decision, or a decision not to trade.
+
+    A NamedTuple so `choose(...)[0]` keeps working for callers that only want
+    the structure, while `.structure is None` expresses abstention - which a
+    bare Structure return could not. Abstention is a real outcome, not an error:
+    the study's rule is to trade the higher-probability denomination only when
+    that probability clears the threshold, and to stand down otherwise.
+    """
+
+    structure: Structure | None
+    reason: str
+    scores: tuple[tuple[str, float], ...] = ()
+
+    @property
+    def abstained(self) -> bool:
+        return self.structure is None
+
+    @property
+    def score_map(self) -> dict[str, float]:
+        return dict(self.scores)
+
+
 class DenominationSelector:
-    """Chooses T1 or K2 for a candidate.
+    """Chooses T1 or K2 for a candidate, or abstains.
 
     Where more than one denomination is submittable the choice is a prediction,
     not a rule: the source study finds both profitable in SPX but with different
     payoff profiles, and the SPY paper selects between them with a trained
-    model. That model is the one piece not yet ported, so the default here picks
-    T1 - the better-performing denomination in the study - and records that the
-    choice was a fallback rather than a prediction.
+    model. This base class is the fallback used when no model is supplied - it
+    picks T1, the better-performing denomination in the study, and records that
+    the choice was a fallback rather than a prediction.
 
-    Replace with a model-backed selector by implementing `choose`.
+    `ModelDenominationSelector` is the model-backed implementation.
     """
 
     name = "default_t1"
 
-    def choose(self, underlying: str, cand) -> tuple[Structure, str]:
+    def choose(self, underlying: str, cand=None, underlying_price: float | None = None) -> Choice:
         allowed = allowed_denominations(underlying)
         if len(allowed) == 1:
-            return allowed[0], f"{allowed[0].name} is the only submittable denomination"
-        return Structure.T1, "no model available; defaulting to T1"
+            return Choice(allowed[0], f"{allowed[0].name} is the only submittable denomination")
+        return Choice(Structure.T1, "no model available; defaulting to T1")
+
+
+class ModelDenominationSelector(DenominationSelector):
+    """Selects a denomination from a trained probability model.
+
+    `scorer` maps one live F* feature vector to a probability. It is called
+    once per submittable denomination, because a rectangle does not have one
+    feature vector - it has one per denomination, differing in exactly the two
+    strategy-selected features (F* carries no is_t1/is_k2 column, so that is the
+    only channel through which the model learns which trade it is scoring).
+
+    Abstains when the best probability falls below `min_probability`, and also
+    when the feature vector cannot be built. The second case matters: a missing
+    greek or an unpriceable leg means we do not know what we would be scoring,
+    and a selector that guessed T1 there would be presenting an absence of
+    information as a prediction.
+    """
+
+    name = "model"
+
+    def __init__(self, scorer, min_probability: float = 0.5) -> None:
+        self.scorer = scorer
+        self.min_probability = min_probability
+
+    def choose(self, underlying: str, cand=None, underlying_price: float | None = None) -> Choice:
+        allowed = allowed_denominations(underlying)
+        if len(allowed) == 1:
+            return Choice(allowed[0], f"{allowed[0].name} is the only submittable denomination")
+        if cand is None or underlying_price is None:
+            return Choice(None, "no candidate or spot supplied; cannot score a denomination")
+
+        from .features import FeatureError, feature_vector
+
+        scores: list[tuple[str, float]] = []
+        for structure in allowed:
+            label = structure.name  # "T1" / "K2"
+            try:
+                vec = feature_vector(cand, label, underlying_price, cand.signal_date)
+            except FeatureError as exc:
+                return Choice(None, f"features unavailable for {label}: {exc}", tuple(scores))
+            scores.append((label, float(self.scorer(vec))))
+
+        best_label, best_p = max(scores, key=lambda kv: kv[1])
+        detail = ", ".join(f"{k} {v:.4f}" for k, v in scores)
+        if best_p < self.min_probability:
+            return Choice(
+                None,
+                f"best probability {best_p:.4f} is below the {self.min_probability:.2f} "
+                f"threshold ({detail}); standing down",
+                tuple(scores),
+            )
+        return Choice(Structure[best_label], f"{best_label} at {best_p:.4f} ({detail})", tuple(scores))
 
 
 def structure_for(underlying: str, selector: DenominationSelector | None = None,
-                  cand=None) -> Structure:
-    """Backwards-compatible entry point returning a single structure."""
+                  cand=None, underlying_price: float | None = None) -> Structure:
+    """Backwards-compatible entry point returning a single structure.
+
+    Raises if the selector abstained: callers of this function have no way to
+    represent "no trade", so silently substituting a default would convert a
+    stand-down into a position.
+    """
     sel = selector or DenominationSelector()
-    return sel.choose(underlying, cand)[0]
+    choice = sel.choose(underlying, cand, underlying_price)
+    if choice.structure is None:
+        raise ValueError(f"selector abstained: {choice.reason}")
+    return choice.structure
 
 
 def config_for(underlying: str, **kwargs) -> "PositionConfig":

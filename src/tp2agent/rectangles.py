@@ -230,6 +230,26 @@ class RectangleCandidate:
 
     @property
     def normalized_severity(self) -> float:
+        """(rhs - lhs) / (lhs + rhs), the study's convention.
+
+        Normalised by the SUM of the two products, not by rhs alone. Verified
+        against conservative_bidask.py:
+
+            severity = rhs - lhs
+            gross    = lhs + rhs
+            normalized_severity = severity / gross
+
+        This matters beyond bookkeeping: it is a model input, so a different
+        denominator puts the feature vector off the distribution the model was
+        trained on. Dividing by rhs - as this did previously - roughly doubles
+        the value for small violations, since rhs ~ lhs there.
+        """
+        gross = self.lhs + self.rhs
+        return self.violation_size / gross if gross > 0 else 0.0
+
+    @property
+    def severity_over_rhs(self) -> float:
+        """The earlier convention, kept only for continuity of stored data."""
         return self.violation_size / self.rhs if self.rhs > 0 else 0.0
 
     @property
@@ -581,6 +601,15 @@ def build_rectangles(
                     lhs = A.quote.ask * B.quote.ask
                     rhs = C.quote.bid * D.quote.bid
                     if margins is not None and rhs > 0:
+                        # Deliberately (rhs - lhs)/rhs, NOT the study's
+                        # severity/(lhs + rhs). This is a diagnostic histogram
+                        # over ALL rectangles - violations and not - accumulated
+                        # into fixed bins that are already populated. Rescaling
+                        # it would silently redistribute past counts across bins
+                        # with no way to separate the two conventions, because
+                        # margins.csv stores only the binned counts, not lhs and
+                        # rhs. It is a different quantity from
+                        # RectangleCandidate.normalized_severity; do not unify.
                         margins.append((rhs - lhs) / rhs)
                     if rhs <= lhs:
                         census["no_violation"] += 1
