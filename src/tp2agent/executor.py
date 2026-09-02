@@ -60,6 +60,34 @@ class ExecutionError(RuntimeError):
 class LimitPolicy:
     """How far better than the indicative quote we insist on being filled.
 
+    HOW BIG SHOULD THE SHADE ACTUALLY BE? Smaller than instinct suggests.
+
+    The violation is already computed on crossable prices - A_ask * B_ask <
+    C_bid * D_bid - so the cost of crossing the spread is inside the signal
+    itself. That is the whole point of the conservative bid/ask construction.
+    If the relation fails at those prices, executing at those prices captures
+    it, and demanding more is not extra safety: it is asking for a gift on top
+    of an arbitrage. On real NBBO the right shade is close to zero.
+
+    The shade exists for a different reason - the feed. Detection runs on
+    Alpaca's indicative quotes, which are model-derived and 15 minutes stale, so
+    A_ask is an estimate rather than an offer anyone must honour.
+
+    But even that argues for a small number, because the paper engine fills
+    against REAL NBBO. A limit at the indicative net therefore already asks the
+    right question: the feed claims this package costs X - is the real market
+    there? A bad feed cannot produce a bad fill, only a bad signal, and the
+    limit order is what turns a bad signal into a non-fill.
+
+    The one genuine reason for any margin is the 1:1 cap. At the theoretical
+    weights the package would be self-financing; capped to whole contracts it is
+    a defined-risk bet on reversion rather than a lock, so a little conservatism
+    is warranted. A little.
+
+    The first live order was sent at shade_spreads=1.0, which demanded 50% below
+    the quoted price and expired unfilled - as it deserved to. Nobody sells at
+    half price.
+
     The shade is expressed in units of the position's own quoted spread rather
     than as a flat percentage: a wide, uncertain market demands a bigger
     concession than a tight one, which is the correct scaling. `shade_spreads =
