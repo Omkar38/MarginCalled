@@ -160,35 +160,81 @@ def decision_evidence() -> list[str]:
     return lines
 
 
-def ai_evidence() -> list[str]:
+def ai_evidence() -> tuple[bool | None, list[str]]:
+    """Report what is actually RUNNING, not what is implemented.
+
+    An evidence pack that describes a capability the system is not exercising is
+    worse than one that omits it, so each layer is probed for runtime status and
+    an unused one is labelled BUILT, NOT RUNNING.
+    """
     from tp2agent.features import F_STAR_LIVE
     from tp2agent.narrator import DEFAULT_MODEL, LLMNarrator
+    from tp2agent.position import DenominationSelector
 
-    return [
-        "**Deterministic layer** — the early-exercise theory gate (Propositions 2.1–2.2), "
-        "the TP2 determinant, and 16 risk gates. Nothing probabilistic can override these.",
+    llm = LLMNarrator()
+    llm_live = llm.available
+    selector = DenominationSelector()
+    selector_live = getattr(selector, "name", "") != "default_t1"
+
+    def status(live: bool) -> str:
+        return "**RUNNING**" if live else "**BUILT, NOT RUNNING**"
+
+    lines = [
+        "| layer | kind | status |",
+        "|---|---|---|",
+        "| Theory gate + 16 risk gates | deterministic | **RUNNING** |",
+        f"| Denomination selector ({len(F_STAR_LIVE)} features) | learned | {status(selector_live)} |",
+        f"| Narrator (`{DEFAULT_MODEL}`) | language model | {status(llm_live)} |",
         "",
-        f"**Learned layer** — the denomination selector scores a {len(F_STAR_LIVE)}-feature "
-        "vector per candidate *per denomination* and may abstain. Feature definitions were "
-        "verified bit-exact against the source study's 354,974-row dataset "
-        "(`scripts/validate_features_against_study.py`).",
+    ]
+
+    if not selector_live:
+        lines += [
+            "> The selector has **no trained model loaded**, so it falls back to T1 and "
+            "records the choice as a fallback rather than a prediction. Its feature "
+            "builder is complete and verified bit-exact against the source study's "
+            "354,974-row dataset (`scripts/validate_features_against_study.py`), and it "
+            "scores one vector per denomination with an abstention threshold - but until "
+            "a scorer is supplied, no learned decision is being made.",
+            "",
+        ]
+    if not llm_live:
+        lines += [
+            "> The narrator has **no `ANTHROPIC_API_KEY`**, so every narration so far has "
+            "used the deterministic template fallback. The language model has not been "
+            "called. Set the key to activate it; `scripts/narrate.py --llm` then produces "
+            "the same report in prose.",
+            "",
+        ]
+
+    lines += [
+        "**Deterministic layer.** The TP2 determinant and an early-exercise theory gate "
+        "(Propositions 2.1-2.2). TP2 is a theorem about European calls, so before trading "
+        "an American one the agent must certify that early exercise carries no premium. An "
+        "empty dividend list is not evidence of no dividend: the gate tracks the date "
+        "through which absence is assertable and returns UNRESOLVED beyond it, and "
+        "UNRESOLVED cannot trade.",
         "",
-        f"**Language layer** — `narrator.py`, model `{DEFAULT_MODEL}`, writes a human-readable "
-        "decision record from the audit log.",
+        "**Learned layer.** A rectangle has one feature vector per denomination, not one "
+        "overall - the feature set carries no strategy indicator, so the choice reaches the "
+        "model through exactly two features. The selector may abstain.",
         "",
-        "The narrator is a **reader, not a participant**, and this is enforced rather than "
-        "intended:",
+        "**Language layer.** The narrator is a **reader, not a participant**, and this is "
+        "enforced rather than intended:",
         "",
         "- it imports nothing from the decision path, and nothing in the decision path "
-        "imports it — both directions asserted by tests",
-        f"- the model is given **no tools** (`'tools' not in narrator.py` — verified)",
+        "imports it - both directions asserted by tests",
+        "- the model is given **no tools** (asserted: `'tools'` does not appear in "
+        "`narrator.py`)",
         "- its output is written to a file the trading path never opens",
         "- it falls back to a deterministic template on any failure, so a narration failure "
         "cannot look like a trading failure",
         "",
-        "If the language model hallucinated entirely, the trades that happened would still be "
-        "exactly the trades the deterministic gates approved.",
+        "If the language model hallucinated entirely, the trades that happened would still "
+        "be exactly the trades the deterministic gates approved.",
     ]
+    ai_ok = True if (llm_live and selector_live) else (None if (llm_live or selector_live) else False)
+    return ai_ok, lines
 
 
 def main() -> int:
@@ -231,6 +277,8 @@ def main() -> int:
     rows.append(("Every strategy includes options trading", True))
     writeup = (ROOT / "WRITEUP.md").exists()
     rows.append(("One-page write-up (AI logic, risk gates, Alpaca infrastructure)", writeup))
+    ai_ok, ai_lines = ai_evidence()
+    rows.append(("AI components actually running (see section 4)", ai_ok))
 
     L.append("| requirement | status |")
     L.append("|---|---|")
@@ -251,7 +299,7 @@ def main() -> int:
           "",
           "Entry is on a TP2 violation; the exit is on reversion.",
           ]
-    L += ["", "---", "", "## 4. AI logic", ""] + ai_evidence()
+    L += ["", "---", "", "## 4. AI logic", ""] + ai_lines
     L += ["", "---", "", "## 5. Deterministic risk gates", ""] + risk_evidence()
     L += ["", "---", "", "## 6. Decision audit trail", ""] + decision_evidence()
 
@@ -261,7 +309,8 @@ def main() -> int:
               "| suite | result |", "|---|---|"] + test_rows
 
     L += ["", "---", "", "## Not yet met", ""]
-    missing = [n for n, ok in rows if ok is False]
+    missing = [n for n, ok in rows if ok is False] + [
+        f"{n} (partial)" for n, ok in rows if ok is None]
     if missing:
         for m in missing:
             L.append(f"- {m}")
