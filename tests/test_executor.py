@@ -238,6 +238,60 @@ def test_module_never_constructs_a_market_order():
     assert '"limit"' in src
 
 
+# --------------------------------------------------------------------------
+# The shade must never make an order unfillable
+# --------------------------------------------------------------------------
+
+
+def test_shade_never_inverts_a_debit_package():
+    """A negative limit on a debit package asks to be PAID to open it.
+
+    Observed live on SPX: a $0.55 net debit against an $11.95 package spread
+    produced a -$11.40 limit. That is not a conservative price, it is an
+    impossible one - outside any real NBBO, so it can never fill.
+    """
+    from tp2agent.executor import LimitPolicy, OrderPlan, build_order
+
+    spec = _spec()
+    plan = build_order(spec, LimitPolicy(shade_spreads=50.0))   # absurdly wide
+    assert (plan.limit_price > 0) == (plan.indicative_net > 0), (
+        f"limit {plan.limit_price} crossed zero from net {plan.indicative_net}"
+    )
+
+
+def test_shade_is_capped_at_the_configured_fraction_of_net():
+    from tp2agent.executor import LimitPolicy, build_order
+
+    plan = build_order(_spec(), LimitPolicy(shade_spreads=50.0, max_shade_net_fraction=0.5))
+    assert plan.shade <= 0.5 * abs(plan.indicative_net) + 1e-12
+
+
+def test_a_clamped_shade_says_so_in_the_notes():
+    from tp2agent.executor import LimitPolicy, build_order
+
+    plan = build_order(_spec(), LimitPolicy(shade_spreads=50.0))
+    assert any("clamped" in n for n in plan.notes)
+
+
+def test_a_small_shade_is_left_alone():
+    """The clamp is a ceiling, not a target: it must not inflate a small shade."""
+    from tp2agent.executor import LimitPolicy, build_order
+
+    plan = build_order(_spec(), LimitPolicy(shade_spreads=1e-6, min_shade_abs=0.01))
+    assert abs(plan.shade - 0.01) < 1e-12
+    assert not any("clamped" in n for n in plan.notes)
+
+
+def test_credit_packages_keep_their_sign_too():
+    from tp2agent.executor import LimitPolicy, build_order
+
+    spec = _spec()
+    plan = build_order(spec, LimitPolicy(shade_spreads=50.0))
+    if plan.indicative_net < 0:
+        assert plan.limit_price < 0
+        assert plan.limit_price <= plan.indicative_net, "a credit must not shrink"
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0

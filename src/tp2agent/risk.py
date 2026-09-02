@@ -76,8 +76,14 @@ class RiskLimits:
     """Starting engineering limits. Not optimised trading parameters."""
 
     # Sizing, as fractions of account equity
-    max_loss_per_trade_pct: float = 0.0025  # 0.25%
-    max_aggregate_loss_pct: float = 0.01  # 1%
+    # Sized against the observed distribution of SPX max losses rather than a
+    # round number. Across 64 sized positions in one live scan the median max
+    # loss was $6,213 (min $55, max $62,157), so a 0.25% cap admitted 2 of 64
+    # candidates - the agent was gated to roughly zero order flow. At 2.5% it
+    # admits about a third, which is real flow while a single loss stays well
+    # inside a survivable fraction of the account.
+    max_loss_per_trade_pct: float = 0.025  # 2.5%
+    max_aggregate_loss_pct: float = 0.10  # 10%
     daily_stop_pct: float = 0.0075  # 0.75%
 
     # Portfolio

@@ -70,6 +70,21 @@ class LimitPolicy:
     shade_spreads: float = 1.0
     min_shade_abs: float = 0.01  # never demand less than one tick
     round_to: float = 0.01
+    # Ceiling on the shade, as a fraction of the package's own net price.
+    #
+    # Shading in units of the quoted spread is the right SCALE but the wrong
+    # BOUND when the spread dwarfs the net. A deep-ITM SPX rectangle was
+    # observed with a net debit of $0.55 against an $11.95 package spread: one
+    # full spread of shade produced a limit of -$11.40, an order asking to be
+    # PAID $11.40 to open a package that costs $0.55. That is not a
+    # conservative price, it is an impossible one - it sits outside any real
+    # NBBO and can never fill, so it expresses no preference at all.
+    #
+    # Clamping to a fraction of |net| keeps the limit on the same side of zero
+    # as the package itself, so the order stays conservative and stays
+    # fillable. Bad data still yields non-fills, because the limit is still
+    # strictly better than the indicative quote implied.
+    max_shade_net_fraction: float = 0.5
 
 
 @dataclass
@@ -138,6 +153,15 @@ def build_order(
         legs.append(leg.to_alpaca_leg())
 
     shade = max(policy.shade_spreads * spread, policy.min_shade_abs)
+    # Never let the shade carry the limit across zero. Applied after the tick
+    # floor so the clamp wins: a one-tick shade on a half-tick package would
+    # otherwise still invert it.
+    clamped = False
+    if net != 0.0:
+        ceiling = policy.max_shade_net_fraction * abs(net)
+        if shade > ceiling:
+            shade = ceiling
+            clamped = True
     is_debit = net > 0
 
     if is_debit:
@@ -164,6 +188,13 @@ def build_order(
         f"{shade:.4f} to {limit:+.4f}. A fill requires the real NBBO to be at "
         f"least this much better than the indicative quote implied."
     )
+    if clamped:
+        plan.notes.append(
+            f"shade clamped to {policy.max_shade_net_fraction:.0%} of the "
+            f"{abs(net):.4f} net; one full spread would have been "
+            f"{policy.shade_spreads * spread:.4f} and would have inverted the "
+            f"package's sign, making the order unfillable rather than cautious."
+        )
     if is_debit and limit <= 0:
         plan.notes.append(
             "shade exceeds the debit; the limit is now a credit and will almost "

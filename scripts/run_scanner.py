@@ -22,6 +22,7 @@ USAGE.
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import signal
 import sys
@@ -131,13 +132,15 @@ class TradeContext:
     """
 
     def __init__(self, client, underlying: str, enabled: bool, dry_run: bool,
-                 max_orders: int, shade: float, data_dir: Path) -> None:
+                 max_orders: int, shade: float, data_dir: Path,
+                 limits: "RiskLimits | None" = None) -> None:
         self.client = client
         self.underlying = underlying
         self.enabled = enabled
         self.dry_run = dry_run
         self.max_orders = max_orders
         self.policy = LimitPolicy(shade_spreads=shade)
+        self.limits = limits or RiskLimits()
         self.structure = structure_for(underlying)
         self.sent = 0
         self.mcp = None
@@ -262,7 +265,7 @@ class TradeContext:
             open_position_count=len(held),
             open_leg_symbols=frozenset(held),
         )
-        limits = RiskLimits()
+        limits = self.limits
 
         for cand, category in gated:
             if self.sent >= self.max_orders:
@@ -504,6 +507,12 @@ def main() -> int:
                     help="with --trade, actually send instead of dry-run")
     ap.add_argument("--max-orders", type=int, default=3,
                     help="hard cap on orders per scanner run")
+    ap.add_argument("--max-loss-pct", type=float, default=None,
+                    help="per-trade max loss cap as a fraction of equity "
+                         "(default: RiskLimits, currently 0.025)")
+    ap.add_argument("--max-aggregate-pct", type=float, default=None,
+                    help="aggregate max loss cap as a fraction of equity "
+                         "(default: RiskLimits, currently 0.10)")
     ap.add_argument("--shade", type=float, default=1.0,
                     help="limit shading in package spreads")
     args = ap.parse_args()
@@ -560,14 +569,22 @@ def main() -> int:
 
     store = ScanStore(data_dir)
     tracker = EpisodeTracker(data_dir, underlying)
+    limits = RiskLimits()
+    if args.max_loss_pct is not None:
+        limits = replace(limits, max_loss_per_trade_pct=args.max_loss_pct)
+    if args.max_aggregate_pct is not None:
+        limits = replace(limits, max_aggregate_loss_pct=args.max_aggregate_pct)
     trader = TradeContext(
         client, underlying, args.trade, not args.live_orders,
-        args.max_orders, args.shade, data_dir,
+        args.max_orders, args.shade, data_dir, limits,
     )
     trader.open()
     print(f"trading    : {'ON' if args.trade else 'off'}"
           f"{'' if not args.trade else (' (dry-run)' if trader.dry_run else ' LIVE')}"
           f"  structure {trader.structure.value}  cap {args.max_orders}")
+    if args.trade:
+        print(f"risk       : per-trade {limits.max_loss_per_trade_pct:.2%} "
+              f"aggregate {limits.max_aggregate_loss_pct:.2%}  shade {args.shade}")
     cfg = RectangleConfig(
         max_relative_spread=args.max_spread,
         violation_buffer_pct=args.buffer,
