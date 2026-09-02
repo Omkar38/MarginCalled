@@ -45,6 +45,8 @@ from .rectangles import RectangleCandidate
 __all__ = [
     "Structure",
     "structure_for",
+    "allowed_denominations",
+    "DenominationSelector",
     "config_for",
     "EUROPEAN_UNDERLYINGS",
     "Side",
@@ -80,8 +82,22 @@ COMMISSION_PER_CONTRACT_SIDE = COMMISSION_ALPACA_PAPER
 
 
 class Structure(str, Enum):
-    TWO_LEG = "two_leg"
+    """The tradeable denominations, per Table 5.1 of the source study.
+
+    T1  buy A (K1,T1), sell D (K2~,T1)   - both legs at T1, a vertical
+    K2  buy B (K2,T2), sell D (K2~,T1)   - legs at T2 and T1, a diagonal
+
+    Both short D, the near-dated leg, which is why the study retains exactly
+    these two. FOUR_LEG trades the whole rectangle and is not one of the
+    paper's denominations; it is kept for comparison only.
+    """
+
+    T1 = "two_leg"        # value kept for backward compatibility with stored data
+    K2 = "k2_diagonal"
     FOUR_LEG = "four_leg"
+
+    # Legacy alias: TWO_LEG was the original name for the T1 denomination.
+    TWO_LEG = "two_leg"
 
 
 class Side(str, Enum):
@@ -201,15 +217,48 @@ EUROPEAN_UNDERLYINGS = frozenset(
 )
 
 
-def structure_for(underlying: str) -> Structure:
-    """The only multi-leg structure this underlying will accept.
+def allowed_denominations(underlying: str) -> tuple[Structure, ...]:
+    """Which denominations this underlying can actually trade.
 
-    European -> TWO_LEG (the T1 denomination; both legs share T1).
-    American  -> FOUR_LEG (spans both expiries; accepted, verified on SPY).
+    European underlyings can only submit same-expiry legs, so K2 - a diagonal
+    across T1 and T2 - is rejected outright (HTTP 422, code 42210000, verified
+    live on SPX). That leaves T1, which is also the denomination the source
+    study singles out as performing best, so the constraint costs nothing.
+
+    American underlyings accept both.
     """
     if underlying.upper() in EUROPEAN_UNDERLYINGS:
-        return Structure.TWO_LEG
-    return Structure.FOUR_LEG
+        return (Structure.T1,)
+    return (Structure.T1, Structure.K2)
+
+
+class DenominationSelector:
+    """Chooses T1 or K2 for a candidate.
+
+    Where more than one denomination is submittable the choice is a prediction,
+    not a rule: the source study finds both profitable in SPX but with different
+    payoff profiles, and the SPY paper selects between them with a trained
+    model. That model is the one piece not yet ported, so the default here picks
+    T1 - the better-performing denomination in the study - and records that the
+    choice was a fallback rather than a prediction.
+
+    Replace with a model-backed selector by implementing `choose`.
+    """
+
+    name = "default_t1"
+
+    def choose(self, underlying: str, cand) -> tuple[Structure, str]:
+        allowed = allowed_denominations(underlying)
+        if len(allowed) == 1:
+            return allowed[0], f"{allowed[0].name} is the only submittable denomination"
+        return Structure.T1, "no model available; defaulting to T1"
+
+
+def structure_for(underlying: str, selector: DenominationSelector | None = None,
+                  cand=None) -> Structure:
+    """Backwards-compatible entry point returning a single structure."""
+    sel = selector or DenominationSelector()
+    return sel.choose(underlying, cand)[0]
 
 
 def config_for(underlying: str, **kwargs) -> "PositionConfig":
@@ -287,19 +336,31 @@ def build_position(
 
     A, B, C, D = cand.A, cand.B, cand.C, cand.D
 
-    if cfg.structure is Structure.TWO_LEG:
-        # T1 vertical only: long A (K1), short D (K2~), K1 < K2~ -> debit spread.
-        debit = A.quote.ask - D.quote.bid
+    if cfg.structure in (Structure.T1, Structure.K2):
+        # Both denominations short D. T1 buys A (same expiry as D); K2 buys B.
+        if cfg.structure is Structure.T1:
+            long_leg, label = A, "T1"
+        else:
+            long_leg, label = B, "K2"
+
+        debit = long_leg.quote.ask - D.quote.bid
         spec.legs = [
-            PositionLeg(A.symbol, A.strike, A.expiry.isoformat(), Side.BUY, 1, A.quote.ask),
+            PositionLeg(long_leg.symbol, long_leg.strike,
+                        long_leg.expiry.isoformat(), Side.BUY, 1, long_leg.quote.ask),
             PositionLeg(D.symbol, D.strike, D.expiry.isoformat(), Side.SELL, 1, D.quote.bid),
         ]
         spec.entry_cash = -debit * CONTRACT_MULTIPLIER
         spec.max_loss = max(debit, 0.0) * CONTRACT_MULTIPLIER
-        spec.is_covered = D.strike > A.strike
+        # For T1 both legs share an expiry and K1 < K2~, so the long lower strike
+        # covers the short higher one. For K2 the long is later-dated and higher
+        # struck, which also caps the short.
+        spec.is_covered = (
+            D.strike > long_leg.strike or long_leg.expiry > D.expiry
+        )
         spec.notes.append(
-            "TWO_LEG is a debit bull call spread: directionally long, not a TP2 "
-            "arbitrage. Included for comparison only."
+            f"{label} denomination capped 1:1: buy {long_leg.symbol}, sell "
+            f"{D.symbol}. Defined risk, but the paper's credit-equals-violation "
+            f"property does not survive the cap."
         )
         n_contracts = 2
     else:

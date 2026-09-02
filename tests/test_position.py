@@ -181,11 +181,37 @@ def test_riskless_credit_spread_is_refused_as_stale_quotes():
     assert "non-positive max loss" in (spec.rejected_reason or "")
 
 
-def test_two_leg_records_the_economics_warning():
-    spec = build_position(
-        _realistic_candidate(), PositionConfig(structure=Structure.TWO_LEG)
-    )
-    assert any("not a TP2 arbitrage" in n for n in spec.notes)
+def test_denominations_record_the_economics_warning():
+    """Both T1 and K2 must disclose that the 1:1 cap changes the economics."""
+    for structure, label in ((Structure.T1, "T1"), (Structure.K2, "K2")):
+        spec = build_position(
+            _realistic_candidate(), PositionConfig(structure=structure)
+        )
+        assert spec.is_executable, (structure, spec.rejected_reason)
+        assert any(label in n for n in spec.notes), structure
+        assert any("does not survive the cap" in n for n in spec.notes), structure
+
+
+def test_k2_buys_the_far_leg_and_shorts_the_near():
+    """K2: buy B (K2,T2), sell D (K2~,T1). Both denominations short D."""
+    cand = _realistic_candidate()
+    spec = build_position(cand, PositionConfig(structure=Structure.K2))
+    buys = [l for l in spec.legs if l.side is Side.BUY]
+    sells = [l for l in spec.legs if l.side is Side.SELL]
+    assert len(buys) == 1 and len(sells) == 1
+    assert buys[0].symbol == cand.B.symbol
+    assert sells[0].symbol == cand.D.symbol
+
+
+def test_t1_buys_the_near_leg_and_shorts_the_near():
+    """T1: buy A (K1,T1), sell D (K2~,T1). Both legs share T1."""
+    cand = _realistic_candidate()
+    spec = build_position(cand, PositionConfig(structure=Structure.T1))
+    buys = [l for l in spec.legs if l.side is Side.BUY]
+    sells = [l for l in spec.legs if l.side is Side.SELL]
+    assert buys[0].symbol == cand.A.symbol
+    assert sells[0].symbol == cand.D.symbol
+    assert buys[0].expiry == sells[0].expiry, "T1 legs must share an expiry"
 
 
 def test_capping_note_is_always_present():
