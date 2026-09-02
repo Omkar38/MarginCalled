@@ -76,6 +76,41 @@ def _fmt(value, spec: str = ".4f") -> str:
         return "n/a"
 
 
+def _stratified_sample(records: list, limit: int) -> list:
+    """A sample that contains every outcome, not just the commonest one.
+
+    Taking the first N non-action records is not a sample, it is a prefix: on a
+    real SPY log it fed 123 consecutive `not_executable` rows and none of the
+    722 `theory_blocked` ones, and the narration correctly reported that it had
+    no evidence for a fifth of the session. Every outcome now gets a share, and
+    actions are always kept in full because there are few of them and they are
+    the ones a reader most wants to see.
+    """
+    if len(records) <= limit:
+        return records
+    actions = [r for r in records if r.outcome.is_action]
+    groups: dict = {}
+    for r in records:
+        if r.outcome.is_action:
+            continue
+        groups.setdefault(r.outcome.value, []).append(r)
+
+    budget = max(limit - len(actions), 0)
+    out = list(actions)
+    if groups and budget:
+        per = max(budget // len(groups), 1)
+        for name in sorted(groups):
+            rows = groups[name]
+            if len(rows) <= per:
+                out.extend(rows)
+                continue
+            # Even stride across the group, so the sample spans the session
+            # rather than clustering at whichever end the log was written from.
+            step = len(rows) / per
+            out.extend(rows[int(i * step)] for i in range(per))
+    return out[:limit] if len(out) > limit else out
+
+
 class TemplateNarrator:
     """Deterministic narration. No network, no key, no failure mode."""
 
@@ -101,6 +136,14 @@ class TemplateNarrator:
                 f"    determinant: A*B ask {_fmt(d.get('lhs'))} vs C*D bid "
                 f"{_fmt(d.get('rhs'))}, severity {_fmt(d.get('normalized_severity'), '.4%')}"
             )
+            if d.get("tick_bound_required") is not None:
+                # Spelled out because severity and the tick bound are normalised
+                # differently and look contradictory side by side.
+                lines.append(
+                    f"    tick bound: violation {_fmt(d.get('violation_size'))} vs "
+                    f"required {_fmt(d.get('tick_bound_required'))} "
+                    f"({'clears' if d.get('clears_tick_bound') else 'FAILS'})"
+                )
         if r.theory_category:
             lines.append(f"    theory: {r.theory_category}")
         if r.selector:
@@ -185,7 +228,7 @@ class LLMNarrator:
     )
 
     def __init__(self, api_key: str | None = None, model: str = DEFAULT_MODEL,
-                 max_tokens: int = 1200, timeout: int = 60,
+                 max_tokens: int = 4000, timeout: int = 120,
                  max_records: int = 120, workspace_id: str | None = None) -> None:
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         # Identity-linked keys must name the workspace they act in; the API
@@ -202,6 +245,7 @@ class LLMNarrator:
         self.fallback = TemplateNarrator()
         self.last_error: str | None = None
         self.usage: dict = {}
+        self.truncated: bool = False
 
     @property
     def available(self) -> bool:
@@ -264,6 +308,15 @@ class LLMNarrator:
             self.last_error = f"empty response (stop_reason {data.get('stop_reason')})"
             return None
         self.usage = data.get("usage") or {}
+        # A narration cut off mid-sentence looks like a bug in the agent rather
+        # than a token ceiling, so say which it was instead of leaving a
+        # dangling clause.
+        if data.get("stop_reason") == "max_tokens":
+            self.truncated = True
+            text += (f"\n\n_[narration truncated at max_tokens={self.max_tokens}; "
+                     f"re-run with a higher --max-tokens for the full account]_")
+        else:
+            self.truncated = False
         self.last_error = None
         return text
 
@@ -304,10 +357,7 @@ class LLMNarrator:
         counts: dict[str, int] = {}
         for r in records:
             counts[r.outcome.value] = counts.get(r.outcome.value, 0) + 1
-        sample = records if len(records) <= self.max_records else (
-            [r for r in records if r.outcome.is_action]
-            + [r for r in records if not r.outcome.is_action][: self.max_records]
-        )
+        sample = _stratified_sample(records, self.max_records)
         payload = {
             "total_decisions": len(records),
             "outcome_counts": counts,

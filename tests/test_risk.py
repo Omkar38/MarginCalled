@@ -334,6 +334,39 @@ def test_record_is_json_serialisable():
     assert "kill_switch" in text
 
 
+def test_revalidation_against_the_same_candidate_is_vacuous():
+    """A guard against the bug this gate actually had.
+
+    run_scanner passed the detected candidate as `fresh`, so revalidate compared
+    the rectangle with itself: violation_retained was exactly 1.0 on every record
+    and VIOLATION_GONE / VIOLATION_DECAYED could never fire. Once real
+    re-pricing was wired in, 209 candidates in a single SPX scan failed those
+    two gates - every one of which would otherwise have been sent.
+    """
+    # _realistic_candidate is not itself a violation (its violation_size is
+    # negative), so give it a positive one - the gate only has meaning on a
+    # rectangle that actually violates.
+    cand = replace(_realistic_candidate(), violation_size=1.25)
+    d = RiskDecision()
+    revalidate(cand, cand, RiskLimits(), d)
+    assert d.violation_retained == 1.0
+    assert not d.rejections, "self-comparison can never reject - which is the bug"
+
+
+def test_revalidation_catches_a_decayed_violation():
+    cand = replace(_realistic_candidate(), violation_size=1.25)
+    weaker = replace(cand, violation_size=cand.violation_size * 0.10)
+    d = RiskDecision()
+    revalidate(cand, weaker, RiskLimits(min_violation_retained=0.50), d)
+    assert any(c is RejectCode.VIOLATION_DECAYED for c, _ in d.rejections)
+
+
+def test_revalidation_catches_a_vanished_violation():
+    d = RiskDecision()
+    revalidate(_realistic_candidate(), None, RiskLimits(), d)
+    assert any(c is RejectCode.VIOLATION_GONE for c, _ in d.rejections)
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0

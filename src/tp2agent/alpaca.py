@@ -424,6 +424,23 @@ class AlpacaDataClient:
             if not token:
                 return out
 
+    def snapshots_for_symbols(self, symbols: list[str], feed: str) -> dict[str, dict]:
+        """Snapshots for specific contracts, for re-pricing just before sending.
+
+        The scan-wide snapshot is minutes old by the time an order is built.
+        Re-testing the violation on it proves nothing, so this fetches only the
+        four legs that are about to be traded.
+        """
+        if not symbols:
+            return {}
+        status, data = self._get(
+            f"{DATA_HOST}/v1beta1/options/snapshots",
+            {"symbols": ",".join(symbols), "feed": feed},
+        )
+        if status != 200:
+            raise AlpacaError(f"symbol snapshots failed ({status}): {str(data)[:200]}")
+        return data.get("snapshots") or {}
+
     def build_chain(
         self,
         expiries: list[date],

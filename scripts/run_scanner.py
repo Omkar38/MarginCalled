@@ -97,14 +97,66 @@ def _to_theory_rectangle(cand) -> Rectangle:
     )
 
 
+def _reprice(cand, client, feed: str):
+    """Re-price the four legs from a snapshot taken now.
+
+    Returns a candidate rebuilt on current quotes, or None if it can no longer
+    be priced at all. Passing the ORIGINAL candidate as `fresh` - which is what
+    this code did until now - made the revalidation gate vacuous: it compared
+    the rectangle against itself, so violation_retained was exactly 1.0 on every
+    record by construction and the gate could never fire. The scan-wide snapshot
+    is minutes old by the time an order is built, which is exactly the window
+    the gate exists to cover.
+    """
+    from dataclasses import replace
+
+    legs = {"A": cand.A, "B": cand.B, "C": cand.C, "D": cand.D}
+    try:
+        snaps = client.snapshots_for_symbols([l.symbol for l in legs.values()], feed)
+    except Exception:  # noqa: BLE001
+        return None                      # cannot confirm -> treat as gone
+
+    fresh = {}
+    for name, leg in legs.items():
+        snap = snaps.get(leg.symbol)
+        if not snap:
+            return None
+        q = snap.get("latestQuote") or {}
+        bid, ask = q.get("bp"), q.get("ap")
+        if bid is None or ask is None:
+            return None
+        quote = replace(
+            leg.quote, bid=float(bid), ask=float(ask),
+            bid_size=float(q.get("bs") or 0), ask_size=float(q.get("as") or 0),
+        )
+        fresh[name] = replace(leg, quote=quote)
+
+    lhs = fresh["A"].quote.ask * fresh["B"].quote.ask
+    rhs = fresh["C"].quote.bid * fresh["D"].quote.bid
+    return replace(
+        cand, A=fresh["A"], B=fresh["B"], C=fresh["C"], D=fresh["D"],
+        lhs=lhs, rhs=rhs, violation_size=rhs - lhs,
+    )
+
+
 def _determinant(cand) -> dict:
     """The inequality as it stood at the moment of the decision."""
+    # normalized_severity divides by (lhs + rhs); the tick bound is a relative
+    # bound on the PRODUCT and is compared against violation/rhs. Those differ
+    # by a factor of about two, so storing them adjacent invites the reading
+    # that a trade was approved below its own tick bound. The comparable
+    # quantity and the test's own verdict are recorded alongside so the check
+    # is self-evident rather than reconstructible.
+    required = cand.rhs * cand.tick_bound
     return {
         "lhs": cand.lhs,
         "rhs": cand.rhs,
         "violation_size": cand.violation_size,
         "normalized_severity": cand.normalized_severity,
+        "severity_over_rhs": cand.severity_over_rhs,
         "tick_bound": cand.tick_bound,
+        "tick_bound_required": required,
+        "clears_tick_bound": cand.violation_size > required,
         "K1": cand.K1, "K2": cand.K2,
         "K1_adj": cand.K1_adj, "K2_adj": cand.K2_adj,
         "T1": cand.T1.isoformat(), "T2": cand.T2.isoformat(),
@@ -141,6 +193,7 @@ class TradeContext:
         self.max_orders = max_orders
         self.policy = LimitPolicy(shade_spreads=shade)
         self.limits = limits or RiskLimits()
+        self.feed = "indicative"     # set by the scan loop once the feed resolves
         self.structure = structure_for(underlying)
         self.sent = 0
         self.mcp = None
@@ -280,9 +333,12 @@ class TradeContext:
                     determinant=_determinant(cand), quotes=_leg_quotes(cand),
                 )
                 continue
+            # Re-price immediately before the risk gates, so revalidation tests
+            # the market as it is now rather than as the scan found it.
+            fresh = _reprice(cand, self.client, self.feed)
             decision = evaluate(
                 spec, category, state, limits, datetime.now(), quote_age,
-                detected=cand, fresh=cand,
+                detected=cand, fresh=fresh,
             )
             record = {
                 "ts": ts.isoformat(timespec="seconds"),
@@ -450,6 +506,7 @@ def scan_once(
         ep_stats = tracker.observe(ts, chain, episodes, categories)
 
     if trader is not None and trader.enabled:
+        trader.feed = feed.feed
         trader.reconcile(ts)
         trader.manage_exits(ts, tracker)
         if gated:
