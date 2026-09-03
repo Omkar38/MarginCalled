@@ -46,6 +46,34 @@ def _imports(module: str) -> set[str]:
     return found
 
 
+
+class _NoCredentials:
+    """Context manager clearing the Anthropic credentials.
+
+    LLMNarrator(api_key="") falls back to the environment, because "" is falsy.
+    So a test asserting "no key" behaviour passes on a bare machine and fails
+    the moment a real key is exported - which is exactly what happened once the
+    key went into .env and the compliance report loaded it before running the
+    suite. Same trap as the Alpaca credential test.
+    """
+
+    VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_WORKSPACE_ID")
+
+    def __enter__(self):
+        import os
+
+        self.saved = {k: os.environ.pop(k, None) for k in self.VARS}
+        return self
+
+    def __exit__(self, *exc):
+        import os
+
+        for k, v in self.saved.items():
+            if v is not None:
+                os.environ[k] = v
+        return False
+
+
 def _rec(**kw) -> DecisionRecord:
     base = dict(
         ts="2026-09-02T10:00:00", underlying="SPY", episode_key="SPY261016C640",
@@ -109,11 +137,12 @@ def test_llm_system_prompt_forbids_inventing_facts():
 
 
 def test_llm_falls_back_to_the_template_without_a_key():
-    n = LLMNarrator(api_key="")
-    assert not n.available
-    out = n.record(_rec())
-    assert out == TemplateNarrator().record(_rec())
-    assert n.last_error == "no ANTHROPIC_API_KEY set"
+    with _NoCredentials():
+        n = LLMNarrator(api_key="")
+        assert not n.available
+        out = n.record(_rec())
+        assert out == TemplateNarrator().record(_rec())
+        assert n.last_error == "no ANTHROPIC_API_KEY set"
 
 
 def test_llm_falls_back_when_the_call_fails():
@@ -218,7 +247,8 @@ def test_load_env_does_not_override_the_environment():
 
 
 def test_check_reports_a_missing_key_clearly():
-    ok, detail = LLMNarrator(api_key="").check()
+    with _NoCredentials():
+        ok, detail = LLMNarrator(api_key="").check()
     assert not ok
     assert "ANTHROPIC_API_KEY" in detail
 

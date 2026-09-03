@@ -88,9 +88,16 @@ def test_evidence() -> tuple[bool, list[str]]:
             # os.environ for the account probe, and subprocesses inherit them -
             # which silently changed the result of a credential test. The
             # evidence pack must not alter what it is measuring.
-            env = {k: v for k, v in os.environ.items()
-                   if k not in ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY",
-                                "ALPACA_API_KEY", "ALPACA_SECRET_KEY")}
+            # Every credential .env supplies, not just Alpaca's. Adding the
+            # Anthropic key to .env silently broke two narrator tests the same
+            # way the Alpaca key broke one: the evidence pack was changing the
+            # result it measured.
+            _CREDS = (
+                "APCA_API_KEY_ID", "APCA_API_SECRET_KEY",
+                "ALPACA_API_KEY", "ALPACA_SECRET_KEY",
+                "ANTHROPIC_API_KEY", "ANTHROPIC_WORKSPACE_ID",
+            )
+            env = {k: v for k, v in os.environ.items() if k not in _CREDS}
             r = subprocess.run([sys.executable, str(t)], capture_output=True,
                                text=True, timeout=300, cwd=ROOT, env=env)
             last = [l for l in r.stdout.strip().splitlines() if "passed" in l]
