@@ -33,3 +33,8 @@ reports/*
 !reports/*_narration.md
 !reports/BACKTEST_SIZING.md
 .DS_Store
+
+# Compressed snapshot of the scan output, committed on purpose: the dashboard is
+# built elsewhere from the repository alone, so its data has to travel with it.
+# data/ itself stays ignored - it is live, large and changes every scan.
+!dashboard_data/

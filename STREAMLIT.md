@@ -1,8 +1,32 @@
 # Streamlit dashboard — build brief
 
-Everything needed to build a Streamlit app for this project **without reading the
-codebase**. All paths are relative to the repository root
-(`~/Downloads/Lablab/tp2-agent`).
+Everything needed to build a Streamlit app for this project **from the GitHub
+repository alone** — no local machine, no credentials, no access to this
+conversation.
+
+**Read this first:**
+
+- All data is in **`dashboard_data/<UNDERLYING>/`**, gzip-compressed and
+  committed to the repo. `data/` is gitignored and **will not exist** after a
+  clone — do not reference it.
+- There is **no `.env` and no API access.** The app must render entirely from
+  the committed files. Any live-Alpaca section is optional and must be wrapped
+  so its absence changes nothing.
+- Files are `.csv.gz` and `.jsonl.gz`. `pandas.read_csv` reads `.gz` natively;
+  with the stdlib use `gzip.open(path, "rt")`.
+
+```python
+import gzip, csv, json
+import pandas as pd
+
+df = pd.read_csv("dashboard_data/SPY/violations.csv.gz")          # pandas
+
+with gzip.open("dashboard_data/SPY/episodes.csv.gz", "rt") as fh:  # stdlib
+    rows = list(csv.DictReader(fh))
+
+with gzip.open("dashboard_data/SPY/decisions.jsonl.gz", "rt") as fh:
+    decisions = [json.loads(line) for line in fh if line.strip()]
+```
 
 > **Not a competition requirement.** The Alpaca AI Trading Agents Hackathon
 > mandates only: the Alpaca Trading API plus the MCP server or CLI, options
@@ -26,8 +50,9 @@ when it **reverts**. Underlyings scanned: **SPY**, **SPX**, **XSP**.
 
 ## 2. Data files
 
-All under `data/<UNDERLYING>/` where UNDERLYING ∈ {SPY, SPX, XSP}.
-**Ignore `*.bak` and `scans_pre_delta_screen.csv`** — superseded.
+All under **`dashboard_data/<UNDERLYING>/`** where UNDERLYING ∈ {SPY, SPX, XSP},
+each file gzip-compressed with a `.gz` suffix. Column names and JSON shapes
+below are exactly as stored.
 
 ### `scans.csv` — one row per scan (~88 SPY rows)
 ```
@@ -145,26 +170,26 @@ read with `Path(...).exists()`.
 
 ---
 
-## 4. Live account data (optional, needs credentials)
+## 4. Live account data — NOT available
 
-Credentials live in `.env` (**gitignored, never commit or display**):
-`APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`.
+There is no `.env` in the repository and no API credentials, by design: the file
+is gitignored so keys never reach GitHub. **Build the dashboard entirely from
+`dashboard_data/`.**
+
+If you want an optional live panel, gate it so the app is unaffected when the
+variables are absent:
 
 ```python
-import os, urllib.request, json
-H = {"APCA-API-KEY-ID": os.environ["APCA_API_KEY_ID"],
-     "APCA-API-SECRET-KEY": os.environ["APCA_API_SECRET_KEY"]}
-def get(path):
-    r = urllib.request.Request("https://paper-api.alpaca.markets" + path, headers=H)
-    return json.loads(urllib.request.urlopen(r, timeout=15).read())
-account   = get("/v2/account")     # equity, cash, options_approved_level
-positions = get("/v2/positions")
-orders    = get("/v2/orders?status=all&limit=200")
+import os
+live = os.environ.get("APCA_API_KEY_ID") and os.environ.get("APCA_API_SECRET_KEY")
+if live:
+    ...   # paper host only: https://paper-api.alpaca.markets
+else:
+    st.caption("Live account panel disabled — no credentials configured.")
 ```
-**Paper host only.** Never call `api.alpaca.markets`. Wrap in try/except — the
-dashboard must render from CSVs alone if the API is unreachable.
 
----
+Never call `api.alpaca.markets` (the live host). The account figures needed for
+the headline numbers are in section 6 and need no API call.
 
 ## 5. Suggested pages
 
@@ -223,4 +248,7 @@ dashboard must render from CSVs alone if the API is unreachable.
 - Numeric columns can be empty or `nan` — coerce with a helper that returns
   `None` rather than raising.
 - Suggested run: `streamlit run app.py` from the repository root so the relative
-  `data/` paths resolve.
+  `dashboard_data/` paths resolve. Add `streamlit` and `pandas` to a
+  `requirements.txt`; the repo itself needs nothing else.
+- The snapshot is static — it does not update. Treat it as the record of the
+  2026-09-03 session rather than a live feed, and say so in the UI.
