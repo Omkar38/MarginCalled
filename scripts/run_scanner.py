@@ -27,7 +27,7 @@ import json
 import signal
 import sys
 import time
-from datetime import date, datetime, time as dtime
+from datetime import date, datetime, time as dtime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -137,6 +137,20 @@ def _reprice(cand, client, feed: str):
         cand, A=fresh["A"], B=fresh["B"], C=fresh["C"], D=fresh["D"],
         lhs=lhs, rhs=rhs, violation_size=rhs - lhs,
     )
+
+
+def _broker_time_to_local(stamp: str | None) -> datetime:
+    """Alpaca timestamps are UTC; the rest of this process works in local time."""
+    if not stamp:
+        return datetime.now()
+    try:
+        cleaned = stamp.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(cleaned)
+    except ValueError:
+        return datetime.now()
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone().replace(tzinfo=None)
 
 
 def _expiry_of(occ_symbol: str) -> str:
@@ -281,7 +295,17 @@ class TradeContext:
         """
         if self.executor is None:
             return
-        held = {p.get("symbol") for p in (self.executor.positions() or [])}
+        # Signed holdings, not just symbols. A CLOSING order sells the leg it
+        # originally bought, so reading orders alone produced a phantom position
+        # with the legs inverted - long the higher strike, which is not the T1
+        # structure at all. The broker's signs are the arbiter of what is held.
+        signed = {}
+        for p_ in (self.executor.positions() or []):
+            try:
+                signed[p_.get("symbol")] = float(p_.get("qty") or 0)
+            except (TypeError, ValueError):
+                continue
+        held = {sym for sym, q in signed.items() if q != 0}
         if not held:
             return
         known = self.registry.held_symbols()
@@ -308,6 +332,11 @@ class TradeContext:
                 continue
             if ssym in known or lsym in known:
                 continue
+            # Adopt only if the broker really holds this shape: the long leg
+            # long, the short leg short. That rejects closing orders, which
+            # would otherwise be adopted as inverted positions.
+            if signed.get(lsym, 0) <= 0 or signed.get(ssym, 0) >= 0:
+                continue
             # Recover the tracker's key for this leg pair, so the adopted
             # position can be matched to its episode and exit on reversion.
             ep_key = ssym
@@ -322,8 +351,12 @@ class TradeContext:
                     underlying=self.underlying,
                     denomination=self.structure.name,
                     order_id=o.get("id"),
-                    opened_at=datetime.fromisoformat(
-                        (o.get("filled_at") or o.get("submitted_at"))[:19]
+                    # Broker timestamps are UTC; every other time in this
+                    # process is local. Mixing them made an adopted position
+                    # look four hours in the future, so held_minutes went
+                    # negative and TIME_STOP could never fire on it.
+                    opened_at=_broker_time_to_local(
+                        o.get("filled_at") or o.get("submitted_at")
                     ),
                     long_symbol=lsym, short_symbol=ssym,
                     long_expiry=date.fromisoformat(_expiry_of(lsym)),

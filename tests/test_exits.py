@@ -184,6 +184,23 @@ def test_unknown_episode_holds_so_a_key_mismatch_is_silent():
     assert d.reason is ExitReason.HOLD
 
 
+def test_time_stop_needs_a_local_opened_at():
+    """Adopted positions carried the broker's UTC timestamp while everything
+    else in the process is local, so held_minutes came out about -240 and
+    TIME_STOP could never fire on them. Guards the invariant that opened_at is
+    local wall-clock."""
+    from datetime import timedelta as _td
+
+    utc_looking = _pos(opened_minutes_ago=-240)      # four hours in the future
+    assert utc_looking.held_minutes(NOW) < 0
+    d = should_exit(utc_looking, "active", NOW, ExitPolicy(max_hold_minutes=120))
+    assert not d.should_close, "a future opened_at silently disables the time stop"
+
+    local = _pos(opened_minutes_ago=240)
+    assert should_exit(local, "active", NOW,
+                       ExitPolicy(max_hold_minutes=120)).reason is ExitReason.TIME_STOP
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
