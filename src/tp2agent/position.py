@@ -151,6 +151,10 @@ class PositionConfig:
     max_ratio_denominator: int = 1  # 1 => force 1:1, the only always-covered form
     commission_per_contract_side: float = COMMISSION_PER_CONTRACT_SIDE
     require_covered: bool = True
+    # Reject a spread quoted below this fraction of its intrinsic value. A deep
+    # ITM vertical trades at roughly intrinsic; well under it means the feed is
+    # wrong. Loose enough not to touch a genuinely cheap near-the-money spread.
+    min_intrinsic_fraction: float = 0.50
 
 
 @dataclass
@@ -455,6 +459,34 @@ def build_position(
         # spread - but it is $100 per contract when it is not, and a max loss
         # that is understated is the one number a risk cap cannot tolerate.
         strike_gap = max(long_leg.strike - D.strike, 0.0)
+
+        # No-arbitrage floor. A spread cannot trade far below its intrinsic
+        # value: buying it below intrinsic would itself be free money, so a
+        # quote that says so is a broken quote, not an opportunity.
+        #
+        # Observed live on the indicative feed: SPX 6860/6890 with the forward
+        # ~800 points above both strikes, so the spread is worth essentially its
+        # full 30-point width, quoted such that the package cost 11.14 - 37% of
+        # width. That fake discount is precisely what registered as a TP2
+        # violation. The same feed later quoted the pair at 35.01, above the
+        # width and therefore impossible. Orders priced off either number cannot
+        # fill, because the real market prices the spread correctly.
+        # Only for a debit. A package taken in for a CREDIT is a different
+        # pathology - a long spread that cannot lose - and the existing
+        # non-positive-max-loss guard names it more precisely.
+        if cfg.structure is Structure.T1 and debit > 0:
+            width = D.strike - long_leg.strike
+            if width > 0:
+                intrinsic = min(max(cand.F_T1 - long_leg.strike, 0.0), width)
+                if intrinsic > 0 and debit < cfg.min_intrinsic_fraction * intrinsic:
+                    spec.rejected_reason = (
+                        f"quote below intrinsic: debit {debit:.2f} is under "
+                        f"{cfg.min_intrinsic_fraction:.0%} of the {intrinsic:.2f} "
+                        f"intrinsic on a {width:.0f}-wide spread; the quote is broken, "
+                        f"not cheap"
+                    )
+                    return spec
+
         spec.legs = [
             PositionLeg(long_leg.symbol, long_leg.strike,
                         long_leg.expiry.isoformat(), Side.BUY, 1, long_leg.quote.ask),

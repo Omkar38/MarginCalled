@@ -631,6 +631,16 @@ def main() -> int:
                     help="with --trade, actually send instead of dry-run")
     ap.add_argument("--max-orders", type=int, default=3,
                     help="hard cap on orders per scanner run")
+    # Deep-ITM contracts are where the indicative feed is least reliable. SPX
+    # strikes 39-45% in the money produced orders whose limits sat 87-91% below
+    # the market minutes later, because the quotes that showed a violation were
+    # themselves the anomaly and reverted immediately. The papers impose no
+    # moneyness band, so the default stays wide; narrow it to trade only the
+    # region where the feed behaves.
+    ap.add_argument("--min-moneyness", type=float, default=0.50,
+                    help="lowest K/S to consider (default 0.50; 0.85 excludes deep ITM)")
+    ap.add_argument("--max-moneyness", type=float, default=1.50,
+                    help="highest K/S to consider (default 1.50)")
     ap.add_argument("--max-loss-pct", type=float, default=None,
                     help="per-trade max loss cap as a fraction of equity "
                          "(default: RiskLimits, currently 0.025)")
@@ -713,6 +723,8 @@ def main() -> int:
         max_relative_spread=args.max_spread,
         violation_buffer_pct=args.buffer,
         max_coverage_ratio=args.coverage,
+        min_moneyness=args.min_moneyness,
+        max_moneyness=args.max_moneyness,
     )
 
     # Unbuffered stdout. When output is redirected to a file Python block-buffers

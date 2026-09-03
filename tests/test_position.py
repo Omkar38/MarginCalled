@@ -488,6 +488,39 @@ def test_k2_calendar_max_loss_is_just_the_debit():
     assert abs(spec.max_loss - max(debit, 0.0) * 100) < 1e-9
 
 
+def test_spread_quoted_below_intrinsic_is_refused():
+    """A vertical cannot trade far below intrinsic - that would be free money,
+    so the quote is broken rather than cheap.
+
+    Live on the indicative feed: SPX 6860/6890 with the forward ~800 points
+    above both strikes, so the spread is worth essentially its full 30-point
+    width, quoted so the package cost 11.14. That fake discount was what
+    registered as a TP2 violation, and the resulting order could never fill.
+    """
+    from dataclasses import replace as _replace
+
+    from tp2agent.position import PositionConfig, build_position
+
+    c = _scored_candidate()
+    # Forward far above both strikes -> the spread is worth its whole width.
+    c = _replace(c, F_T1=c.D.strike + 800.0)
+    width = c.D.strike - c.A.strike
+    assert width > 0
+    # Quote the long leg so the debit is a small fraction of that width.
+    cheap = _replace(c.A, quote=_replace(c.A.quote, ask=c.D.quote.bid + 0.05 * width))
+    c = _replace(c, A=cheap)
+    spec = build_position(c, PositionConfig(structure=Structure.T1))
+    assert not spec.is_executable
+    assert "below intrinsic" in (spec.rejected_reason or ""), spec.rejected_reason
+
+
+def test_a_normal_debit_spread_is_untouched_by_the_intrinsic_floor():
+    from tp2agent.position import PositionConfig, build_position
+
+    spec = build_position(_scored_candidate(), PositionConfig(structure=Structure.T1))
+    assert "below intrinsic" not in (spec.rejected_reason or "")
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
