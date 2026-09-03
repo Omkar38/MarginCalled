@@ -191,6 +191,60 @@ else:
 Never call `api.alpaca.markets` (the live host). The account figures needed for
 the headline numbers are in section 6 and need no API call.
 
+## 4b. The LLM narrator — no key required
+
+The agent has a language-model layer that reads the decision log and writes a
+plain-English account of what it did and why it refused what it refused. **Its
+output is already generated and committed**, so the dashboard needs no API key,
+no credentials and no network:
+
+```
+reports/SPY_narration.md
+reports/SPX_narration.md
+reports/XSP_narration.md
+```
+
+```python
+from pathlib import Path
+import streamlit as st
+
+for u in ("SPY", "SPX", "XSP"):
+    f = Path(f"reports/{u}_narration.md")
+    if f.exists():
+        with st.expander(f"{u} — what the agent did, in its own words"):
+            st.markdown(f.read_text())
+```
+
+These were written by `claude-opus-5` from `decisions.jsonl` on 2026-09-03. They
+are static text; treat them as a report, and say in the UI that they describe
+that session.
+
+**Optional: live narration.** Only if you want the app to generate new prose on
+demand. It needs an Anthropic API key and it spends real credits **per viewer**,
+so a public deployment can run up a bill. If you do it:
+
+- Put the key in `.streamlit/secrets.toml` as `ANTHROPIC_API_KEY`, never in
+  code, and add `.streamlit/secrets.toml` to `.gitignore`
+- On Streamlit Community Cloud use the **Secrets** panel, not a file
+- Gate it behind a button so it never runs on page load
+- Fall back to the committed narration when the key is absent
+
+```python
+key = st.secrets.get("ANTHROPIC_API_KEY")
+if key and st.button("Generate fresh narration"):
+    ...   # POST https://api.anthropic.com/v1/messages
+else:
+    st.markdown(Path("reports/SPY_narration.md").read_text())
+```
+
+The repo's own implementation is `src/tp2agent/narrator.py` — it is stdlib-only
+(`urllib`), has no trading permissions, and falls back to a deterministic
+template when the API is unavailable. Note that the key used here is
+identity-linked and also requires an `anthropic-workspace-id` header; the
+committed narrations avoid all of that.
+
+---
+
 ## 5. Suggested pages
 
 1. **Overview** — equity, realised P&L, positions open, round-trips today, win
@@ -204,8 +258,8 @@ the headline numbers are in section 6 and need no API call.
    and `reason`. The most distinctive page: the agent explaining its refusals.
 5. **Trades** — `positions.jsonl` as a table with entry/exit and `close_reason`;
    note **all closes so far are `reverted`**.
-6. **Narrations** — render `reports/*_narration.md` (LLM-written) with
-   `st.markdown`.
+6. **Narrations** — render `reports/*_narration.md` with `st.markdown`. See
+   section 4b: **no API key is needed for this.**
 
 ---
 
