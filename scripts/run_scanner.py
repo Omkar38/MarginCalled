@@ -354,6 +354,21 @@ class TradeContext:
                 fresh = _reprice(cand, self.client, self.feed)
                 revalidate(cand, fresh, limits, decision)
                 decision.approved = not decision.rejections
+            else:
+                # Pass 1 satisfies revalidation trivially by comparing the
+                # rectangle with itself, so a candidate rejected here records
+                # "100% of the violation retained" for a revalidation that
+                # never ran. The narrator read exactly that off a live log.
+                # Clear it rather than leave a check reported as passed.
+                decision.violation_retained = None
+                decision.fresh_violation_size = None
+                decision.checks_passed = [
+                    c for c in decision.checks_passed
+                    if "violation" not in c.lower()
+                ]
+                decision.checks_passed.append(
+                    "revalidation not run (rejected before re-pricing)"
+                )
             record = {
                 "ts": ts.isoformat(timespec="seconds"),
                 "underlying": underlying,
