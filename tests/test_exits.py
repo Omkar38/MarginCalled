@@ -12,6 +12,7 @@ from tp2agent.exits import (  # noqa: E402
     ExitPolicy,
     ExitReason,
     OpenPosition,
+    PositionRegistry,
     build_close_legs,
     should_exit,
 )
@@ -218,6 +219,43 @@ def test_broker_utc_versus_local_makes_ages_negative():
     converted = (_dt.fromisoformat(broker_utc.replace("Z", "+00:00"))
                  .astimezone().replace(tzinfo=None))
     assert abs((local_now - converted).total_seconds()) < 60, "the fix: same instant"
+
+
+def test_a_registry_must_only_hold_its_own_underlying():
+    """The account is shared across scanners. Adoption read every broker
+    position without filtering, so the SPX scanner adopted SPY's book into
+    data/SPX/positions.jsonl. Both scanners then believed they held the same
+    positions, and both would have sent closing orders - the second selling
+    something no longer held, which opens a naked short."""
+    import tempfile as _tf
+    from pathlib import Path as _P
+
+    with _tf.TemporaryDirectory() as d:
+        reg = PositionRegistry(_P(d) / "positions.jsonl")
+        reg.add(OpenPosition(
+            episode_id="e1", underlying="SPX", denomination="T1", order_id="o1",
+            opened_at=NOW, long_symbol="SPX261016C07000000",
+            short_symbol="SPX261016C07050000",
+            long_expiry=date(2026, 10, 16), short_expiry=date(2026, 10, 16),
+        ))
+        for pos in reg.open_positions():
+            assert pos.long_symbol.startswith(pos.underlying), (
+                f"{pos.underlying} registry holds {pos.long_symbol}"
+            )
+            assert pos.short_symbol.startswith(pos.underlying)
+
+
+def test_held_symbols_is_what_guards_against_double_closing():
+    """Both scanners closing the same position is the danger, so held_symbols
+    must report every leg a registry believes it owns."""
+    import tempfile as _tf
+    from pathlib import Path as _P
+
+    with _tf.TemporaryDirectory() as d:
+        reg = PositionRegistry(_P(d) / "p.jsonl")
+        reg.add(_pos())
+        held = reg.held_symbols()
+        assert "SPX261016C07000000" in held and "SPX261016C07050000" in held
 
 
 def main() -> int:

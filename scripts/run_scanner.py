@@ -301,10 +301,23 @@ class TradeContext:
         # originally bought, so reading orders alone produced a phantom position
         # with the legs inverted - long the higher strike, which is not the T1
         # structure at all. The broker's signs are the arbiter of what is held.
+        # ONLY this underlying's contracts.
+        #
+        # The account is shared across scanners, so reading every broker
+        # position meant the SPX scanner adopted SPY's book into
+        # data/SPX/positions.jsonl. Both scanners then believed they owned the
+        # same positions, and both would have sent closing orders for them - the
+        # second close being a sell of something no longer held, which opens a
+        # naked short. Exactly the exposure the covered structure exists to
+        # prevent.
+        prefix = self.underlying.upper()
         signed = {}
         for p_ in (self.executor.positions() or []):
+            sym = p_.get("symbol") or ""
+            if not sym.startswith(prefix):
+                continue
             try:
-                signed[p_.get("symbol")] = float(p_.get("qty") or 0)
+                signed[sym] = float(p_.get("qty") or 0)
             except (TypeError, ValueError):
                 continue
         held = {sym for sym, q in signed.items() if q != 0}
@@ -330,6 +343,8 @@ class TradeContext:
             if not longs or not shorts:
                 continue
             lsym, ssym = longs[0].get("symbol"), shorts[0].get("symbol")
+            if not (lsym or "").startswith(prefix) or not (ssym or "").startswith(prefix):
+                continue
             if lsym not in missing and ssym not in missing:
                 continue
             if ssym in known or lsym in known:
