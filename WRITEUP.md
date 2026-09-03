@@ -58,7 +58,16 @@ quotes immediately before sending** (`VIOLATION_GONE`, `VIOLATION_DECAYED`).
 `should_flatten` is independent of the entry gates: the conditions for getting
 out must not depend on the machinery for getting in.
 
-Sizing is capped at 1:1 — the only always-covered whole-contract ratio. The
+Sizing is capped at 1:1, which is not a simplification but the only structure
+this account can submit. The T1 denomination goes long $C(K_2,T_2)$ shares of A
+and short $C(\tilde K_1,T_2)$ shares of D; since $\tilde K_1 < K_2$ makes C the
+dearer contract, that ratio is **always** short-heavy and its surplus shorts are
+naked calls. Submitting long 1 : short 2 returns **HTTP 403 / 40310000, "account
+not eligible to trade uncovered option contracts"** — level 3 permits spreads,
+naked shorts need level 4 — and no rescaling helps, since a ratio above 1 stays
+above 1 at every multiple. The cost is that the position is long-biased and
+captures only part of the violation, which is what the coverage-ratio screen
+measures. The
 source study takes fractional positions; a live market cannot, and the code
 refuses a fractional ratio at the payload boundary. Max loss for the K2 diagonal
 includes the strike gap $\max(K_2-\tilde K_2, 0)$, which the debit alone omits.
