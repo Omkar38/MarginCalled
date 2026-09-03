@@ -300,6 +300,28 @@ class TradeContext:
             elif status in ("canceled", "expired", "rejected"):
                 del self.pending[episode_id]
 
+    def _current_close_credit(self, pos) -> float | None:
+        """What closing the position is worth right now, as an MLeg net.
+
+        Selling the long at its bid and buying the short back at its ask, which
+        are the sides a close must cross. Negative because a closed debit spread
+        pays us.
+        """
+        if self.executor is None:
+            return None
+        try:
+            snaps = self.client.snapshots_for_symbols(
+                [pos.long_symbol, pos.short_symbol], self.feed
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        lq = (snaps.get(pos.long_symbol) or {}).get("latestQuote") or {}
+        sq = (snaps.get(pos.short_symbol) or {}).get("latestQuote") or {}
+        long_bid, short_ask = lq.get("bp"), sq.get("ap")
+        if long_bid is None or short_ask is None:
+            return None
+        return -(float(long_bid) - float(short_ask))
+
     def manage_exits(self, ts, tracker) -> None:
         """Close positions whose thesis resolved, timed out, or hit the deadline."""
         if self.executor is None:
@@ -311,14 +333,31 @@ class TradeContext:
             if not decision.should_close:
                 continue
             legs = build_close_legs(pos)
-            shade = (self.exit_policy.deadline_shade_spreads if decision.urgent
-                     else self.exit_policy.shade_spreads)
+            # Price the exit from the CURRENT market, not the entry.
+            #
+            # This previously read -(entry_long - entry_short) + shade, which is
+            # wrong twice over: it prices the close off what the package cost
+            # when it was opened, so a position that has moved is offered at a
+            # price unrelated to what it is now worth; and it adds shade_spreads
+            # - a multiplier of the package spread - as though it were dollars.
+            #
+            # An exit that cannot fill is worse than one that fills a cent light:
+            # the whole point of the reversion thesis is being out when it
+            # resolves, so the closing limit is set at the crossable quotes and
+            # only nudged by a tick.
+            close_credit = self._current_close_credit(pos)
+            if close_credit is None:
+                # No quotes to price against. Getting flat still matters more
+                # than the price, so fall back to the entry-based estimate
+                # rather than skipping the exit entirely.
+                close_credit = -(pos.entry_long_price - pos.entry_short_price)
+            nudge = 0.0 if decision.urgent else 0.01
             body = {
                 "qty": str(pos.qty), "type": "limit", "time_in_force": "day",
                 "order_class": "mleg",
-                # Closing a debit spread is a credit to us; shade against the
-                # indicative quote unless the deadline makes price secondary.
-                "limit_price": f"{-(pos.entry_long_price - pos.entry_short_price) + shade:.2f}",
+                # Alpaca MLeg: negative is a credit to us, which is what closing
+                # a debit spread produces.
+                "limit_price": f"{close_credit + nudge:.2f}",
                 "legs": legs,
             }
             try:

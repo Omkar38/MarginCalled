@@ -23,9 +23,30 @@ from tp2agent.risk import RejectCode, RiskDecision  # noqa: E402
 from test_position import _realistic_candidate  # noqa: E402
 
 
+def _violating_candidate():
+    """_realistic_candidate is realistic in its quotes but is NOT a violation -
+    its violation_size is about -80. Every test here builds an order, and an
+    order may only be built for a live violation, so the sides are flipped to
+    make one. The old fixture passed only because nothing checked."""
+    from dataclasses import replace as _replace
+
+    c = _realistic_candidate()
+    lhs = c.A.quote.ask * c.B.quote.ask
+    rhs = c.C.quote.bid * c.D.quote.bid
+    if rhs > lhs:
+        return c
+    # Make C*D exceed A*B by a small, realistic margin.
+    target = lhs * 1.01
+    scale = target / rhs if rhs > 0 else 1.0
+    C = _replace(c.C, quote=_replace(c.C.quote, bid=c.C.quote.bid * scale,
+                                     ask=c.C.quote.ask * scale))
+    new_rhs = C.quote.bid * c.D.quote.bid
+    return _replace(c, C=C, lhs=lhs, rhs=new_rhs, violation_size=new_rhs - lhs)
+
+
 def _spec():
     return build_position(
-        _realistic_candidate(), PositionConfig(structure=Structure.FOUR_LEG)
+        _violating_candidate(), PositionConfig(structure=Structure.FOUR_LEG)
     )
 
 
@@ -315,6 +336,38 @@ def test_clamp_note_does_claim_inversion_when_one_would_occur():
     notes = " ".join(plan.notes)
     assert "clamped" in notes
     assert "would have inverted the package's sign" in notes
+
+
+def test_a_non_violating_package_is_never_ordered():
+    """The premise is holding a mispricing until it corrects. A package with no
+    violation is a directional bet wearing the strategy's clothes, so the order
+    builder refuses it even if every other gate somehow passed."""
+    from dataclasses import replace as _replace
+
+    from tp2agent.executor import ExecutionError, build_order
+
+    spec = _spec()
+    spec.candidate = _replace(spec.candidate, violation_size=-0.25)
+    try:
+        build_order(spec)
+    except ExecutionError as exc:
+        assert "non-violation" in str(exc)
+        return
+    raise AssertionError("a package with no violation must not be ordered")
+
+
+def test_a_zero_violation_is_also_refused():
+    from dataclasses import replace as _replace
+
+    from tp2agent.executor import ExecutionError, build_order
+
+    spec = _spec()
+    spec.candidate = _replace(spec.candidate, violation_size=0.0)
+    try:
+        build_order(spec)
+    except ExecutionError:
+        return
+    raise AssertionError("a zero violation is not a violation")
 
 
 def main() -> int:

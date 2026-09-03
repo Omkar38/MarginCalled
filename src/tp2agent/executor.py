@@ -168,6 +168,21 @@ def build_order(
     if not spec.is_executable:
         raise ExecutionError(spec.rejected_reason or "position is not executable")
 
+    # Last line of defence: only ever trade a live violation.
+    #
+    # Detection, the theory gate and the risk gates each already establish this,
+    # but they are separate code paths and a future change to any of them could
+    # let a non-violating rectangle through. The whole premise is that we hold a
+    # mispricing and exit when it corrects; a package with no violation is not
+    # that trade, it is a directional bet wearing its clothes.
+    cand = spec.candidate
+    if cand.violation_size <= 0:
+        raise ExecutionError(
+            f"refusing to trade a non-violation: A_ask*B_ask {cand.lhs:.4f} is not "
+            f"below C_bid*D_bid {cand.rhs:.4f} (violation size "
+            f"{cand.violation_size:+.4f})"
+        )
+
     net = 0.0
     spread = 0.0
     legs: list[dict] = []
