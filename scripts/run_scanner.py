@@ -258,13 +258,15 @@ class TradeContext:
         if self.executor is None:
             return
         for o in (self.executor.open_orders() or []):
-            sub = (o.get("submitted_at") or "")[:19]
+            sub = o.get("submitted_at")
             if not sub:
                 continue
-            try:
-                age = (ts - datetime.fromisoformat(sub)).total_seconds() / 60.0
-            except ValueError:
-                continue
+            # Broker timestamps are UTC and ts is local. Comparing them directly
+            # made every order look about four hours in the future, so age was
+            # negative, nothing ever exceeded the limit, and stale orders were
+            # never recycled - ten of them accumulated over half an hour, all
+            # priced below the market they were built from.
+            age = (ts - _broker_time_to_local(sub)).total_seconds() / 60.0
             if age >= max_age_minutes:
                 oid = o.get("id")
                 st, _ = self.executor.cancel(oid)

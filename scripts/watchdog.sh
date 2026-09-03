@@ -26,7 +26,7 @@ in_market_hours() {
 
 while true; do
   if in_market_hours; then
-    for u in SPY; do
+    for u in SPY SPX; do
       f="data/$u/scans.csv"
       [ -f "$f" ] || continue
       last=$(tail -1 "$f" | cut -d, -f1)

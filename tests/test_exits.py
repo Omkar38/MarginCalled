@@ -201,6 +201,25 @@ def test_time_stop_needs_a_local_opened_at():
                        ExitPolicy(max_hold_minutes=120)).reason is ExitReason.TIME_STOP
 
 
+def test_broker_utc_versus_local_makes_ages_negative():
+    """The same fault appeared twice: broker timestamps are UTC while the
+    process works in local time. In adopt_orphans it disabled TIME_STOP; in
+    cancel_stale it meant stale orders were never recycled, because a negative
+    age never exceeds any positive limit. Ten orders accumulated over half an
+    hour, every one priced below the market it was built from."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    local_now = _dt(2026, 9, 3, 14, 26, 0)
+    broker_utc = "2026-09-03T18:26:21Z"          # the same instant, in UTC
+
+    naive = _dt.fromisoformat(broker_utc[:19])
+    assert (local_now - naive).total_seconds() < 0, "the bug: negative age"
+
+    converted = (_dt.fromisoformat(broker_utc.replace("Z", "+00:00"))
+                 .astimezone().replace(tzinfo=None))
+    assert abs((local_now - converted).total_seconds()) < 60, "the fix: same instant"
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
