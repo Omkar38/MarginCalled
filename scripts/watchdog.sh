@@ -12,7 +12,7 @@
 
 cd "$(dirname "$0")/.." || exit 1
 STALE_MIN=${STALE_MIN:-12}
-ARGS="--interval 300 --market-hours --min-dte 0 --max-dte 400 --max-expiries 40 --trade --live-orders --shade 0.0 --max-orders 5 --min-moneyness 0.85 --max-moneyness 1.15"
+ARGS="--interval 300 --market-hours --min-dte 0 --max-dte 400 --max-expiries 40 --trade --live-orders --shade 0.0 --max-orders 5 --min-moneyness 0.50 --max-moneyness 1.50"
 
 in_market_hours() {
   local h m dow

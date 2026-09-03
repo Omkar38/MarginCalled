@@ -483,6 +483,60 @@ def test_record_is_json_serialisable():
     json.dumps(found[0].to_record())
 
 
+def test_delta_band_matches_the_paper():
+    """Glasserman, Li & Pirjol section 3: remove options with |delta| > 0.99 or
+    < 0.01, as deep ITM or deep OTM and hard to trade.
+
+    The screen is on DELTA, not moneyness. The paper is explicit that call
+    prices are "TP2 for all strikes K and expiries T > 0", so an OTM-only
+    universe would discard valid ITM violations - which is what an earlier
+    version of this scanner did.
+    """
+    from datetime import date
+
+    from tp2agent.rectangles import (
+        OptionQuote,
+        Quote,
+        RectangleConfig,
+        _delta_out_of_band,
+    )
+
+    cfg = RectangleConfig()
+    assert cfg.min_abs_delta == 0.01 and cfg.max_abs_delta == 0.99
+
+    def leg(d):
+        greeks = {} if d is None else {"delta": d}
+        return OptionQuote("X", 100.0, date(2026, 10, 16), "C",
+                           Quote(1.0, 2.0, 5.0, 5.0), greeks, 0.2)
+
+    assert _delta_out_of_band(leg(0.995), cfg), "deep ITM must be dropped"
+    assert _delta_out_of_band(leg(0.005), cfg), "deep OTM must be dropped"
+    assert not _delta_out_of_band(leg(0.99), cfg), "the band is inclusive"
+    assert not _delta_out_of_band(leg(0.01), cfg)
+    assert not _delta_out_of_band(leg(0.50), cfg), "ITM is not excluded per se"
+
+
+def test_missing_delta_does_not_empty_the_universe():
+    """Alpaca reports no greeks at all for SPX. Dropping every leg for a missing
+    field would be a data outage disguised as a screen."""
+    from datetime import date
+
+    from tp2agent.rectangles import (
+        OptionQuote,
+        Quote,
+        RectangleConfig,
+        _delta_out_of_band,
+    )
+
+    cfg = RectangleConfig()
+    no_greeks = OptionQuote("X", 100.0, date(2026, 10, 16), "C",
+                            Quote(1.0, 2.0, 5.0, 5.0), {}, 0.2)
+    assert not _delta_out_of_band(no_greeks, cfg)
+    nan_delta = OptionQuote("X", 100.0, date(2026, 10, 16), "C",
+                            Quote(1.0, 2.0, 5.0, 5.0), {"delta": float("nan")}, 0.2)
+    assert not _delta_out_of_band(nan_delta, cfg)
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0

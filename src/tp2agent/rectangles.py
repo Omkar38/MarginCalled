@@ -151,6 +151,24 @@ class ChainSnapshot:
         return sorted(self.calls.get(expiry, {}))
 
 
+def _delta_out_of_band(leg: "OptionQuote", cfg: "RectangleConfig") -> bool:
+    """True when the feed reports a delta outside the paper's tradable band.
+
+    Returns False when no delta is reported, so an underlying whose feed omits
+    greeks is scanned rather than silently emptied.
+    """
+    d = leg.greeks.get("delta")
+    if d is None:
+        return False
+    try:
+        a = abs(float(d))
+    except (TypeError, ValueError):
+        return False
+    if a != a:              # NaN
+        return False
+    return a < cfg.min_abs_delta or a > cfg.max_abs_delta
+
+
 @dataclass(frozen=True)
 class RectangleConfig:
     """Screens applied while building.
@@ -192,6 +210,20 @@ class RectangleConfig:
     # narrower scan. Both default to "off" for detection.
     min_leg_mid: float = 0.0
     max_coverage_ratio: float = 1e9
+
+    # Delta band, from Glasserman, Li & Pirjol section 3: "We remove any options
+    # with a delta larger than 0.99 or smaller than 0.01 in absolute terms.
+    # These options are deep in-the-money (ITM) or deep out-of-the-money (OTM)
+    # and may be difficult to trade in practice."
+    #
+    # This is the paper's screen and it is on DELTA, not moneyness. TP2 holds at
+    # every strike - the paper is explicit that Black-Scholes call prices are
+    # "TP2 for all strikes K and expiries T > 0" - so restricting to OTM would
+    # discard valid ITM violations. The delta band excludes only what cannot be
+    # traded, which is the actual problem: an SPX leg 800 points ITM carries
+    # delta ~0.99+ and quotes that bear no relation to its value.
+    min_abs_delta: float = 0.01
+    max_abs_delta: float = 0.99
 
     # Rounding proximity. Glasserman, Li & Pirjol (2025) sec. 4.1: "if no strike
     # is traded within $50 of the rounded-up strike, we discard this option as it
@@ -564,6 +596,15 @@ def build_rectangles(
 
                     if not all(leg.quote.is_usable for leg in legs):
                         census["leg_unusable"] += 1
+                        continue
+
+                    # Glasserman, Li & Pirjol section 3: drop legs outside the
+                    # 0.01-0.99 absolute delta band as untradeable. Applied only
+                    # where the feed reports a delta - Alpaca returns none at all
+                    # for SPX, and silently dropping every SPX leg for a missing
+                    # field would be a data outage disguised as a screen.
+                    if any(_delta_out_of_band(leg, cfg) for leg in legs):
+                        census["leg_delta_out_of_band"] += 1
                         continue
                     if any(
                         leg.quote.relative_spread > cfg.max_relative_spread
