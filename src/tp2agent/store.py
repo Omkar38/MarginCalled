@@ -90,6 +90,7 @@ SCAN_FIELDS = [
     "ts", "feed", "spot", "quote_age_s", "duration_s",
     "expiry_pairs", "rectangles_considered", "no_forward",
     "adjusted_strike_unlisted", "leg_missing", "leg_unusable",
+    "leg_delta_out_of_band",
     "strike_gap_too_wide", "coverage_ratio_too_wide",
     # These four were computed but never persisted, leaving ~15% of considered
     # rectangles unaccounted for in scans.csv. vertical_arbitrage in particular
@@ -191,6 +192,7 @@ class ScanStore:
                 census.get("adjusted_strike_unlisted", 0),
                 census.get("leg_missing", 0),
                 census.get("leg_unusable", 0),
+                census.get("leg_delta_out_of_band", 0),
                 census.get("strike_gap_too_wide", 0),
                 census.get("coverage_ratio_too_wide", 0),
                 census.get("roundup_too_far", 0),

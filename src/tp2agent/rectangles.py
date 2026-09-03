@@ -159,7 +159,7 @@ def _delta_out_of_band(leg: "OptionQuote", cfg: "RectangleConfig") -> bool:
     """
     d = leg.greeks.get("delta")
     if d is None:
-        return False
+        return cfg.require_greeks
     try:
         a = abs(float(d))
     except (TypeError, ValueError):
@@ -224,6 +224,21 @@ class RectangleConfig:
     # delta ~0.99+ and quotes that bear no relation to its value.
     min_abs_delta: float = 0.01
     max_abs_delta: float = 0.99
+
+    # Require the feed to publish a delta at all.
+    #
+    # Alpaca publishes greeks for only the contracts it models: on SPY 4 Sep,
+    # 75 of 244 calls, strikes 700-791 against a spot near 773. The other 169
+    # are the deep-ITM and far-OTM wings - and those are precisely the contracts
+    # quoting spreads above their own width, below their own intrinsic, and
+    # producing orders that cannot fill. A missing delta is the feed saying it
+    # does not model this contract, which is worth more as a signal than as an
+    # absence.
+    #
+    # Off by default because it is an execution judgement, not a property of
+    # TP2, and because Alpaca publishes no greeks whatsoever for SPX, where
+    # enabling it stops trading entirely.
+    require_greeks: bool = False
 
     # Rounding proximity. Glasserman, Li & Pirjol (2025) sec. 4.1: "if no strike
     # is traded within $50 of the rounded-up strike, we discard this option as it
@@ -504,6 +519,7 @@ def build_rectangles(
         "adjusted_strike_unlisted": 0,
         "leg_missing": 0,
         "leg_unusable": 0,
+        "leg_delta_out_of_band": 0,
         "strike_gap_too_wide": 0,
         "coverage_ratio_too_wide": 0,
         "roundup_too_far": 0,

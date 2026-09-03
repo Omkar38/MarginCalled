@@ -637,6 +637,9 @@ def main() -> int:
     # themselves the anomaly and reverted immediately. The papers impose no
     # moneyness band, so the default stays wide; narrow it to trade only the
     # region where the feed behaves.
+    ap.add_argument("--require-greeks", action="store_true",
+                    help="only trade contracts Alpaca publishes greeks for; a "
+                         "missing delta marks a contract the feed does not model")
     ap.add_argument("--min-moneyness", type=float, default=0.50,
                     help="lowest K/S to consider (default 0.50; 0.85 excludes deep ITM)")
     ap.add_argument("--max-moneyness", type=float, default=1.50,
@@ -725,6 +728,7 @@ def main() -> int:
         max_coverage_ratio=args.coverage,
         min_moneyness=args.min_moneyness,
         max_moneyness=args.max_moneyness,
+        require_greeks=args.require_greeks,
     )
 
     # Unbuffered stdout. When output is redirected to a file Python block-buffers

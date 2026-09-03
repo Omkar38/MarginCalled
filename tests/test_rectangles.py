@@ -537,6 +537,23 @@ def test_missing_delta_does_not_empty_the_universe():
     assert not _delta_out_of_band(nan_delta, cfg)
 
 
+def test_every_census_counter_the_builder_writes_is_declared():
+    """A census key incremented but never initialised is a KeyError that only
+    fires when that screen first rejects something - it crashed a scan the first
+    time a delta screen actually matched, having been silent while no leg
+    carried a delta at all."""
+    import re
+    from pathlib import Path as _P
+
+    src = (_P(__file__).resolve().parents[1] / "src" / "tp2agent" / "rectangles.py").read_text()
+    written = set(re.findall(r'census\["([a-z_]+)"\]\s*\+=', src))
+    block = src[src.index("census: dict[str, int] = {"):]
+    block = block[: block.index("}")]
+    declared = set(re.findall(r'"([a-z_]+)":', block))
+    missing = written - declared
+    assert not missing, f"census counters incremented but never declared: {missing}"
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
