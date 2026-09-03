@@ -23,5 +23,12 @@ snapshots/
 # Runtime scan output — regenerable, changes every scan.
 # Snapshot a final copy manually before submission if it's wanted as evidence.
 data/
-reports/
+# Note: reports/* not reports/ - git cannot re-include a file inside an
+# excluded DIRECTORY, so the negations below only work if the contents are
+# excluded rather than the folder itself.
+reports/*
+# The evidence pack and the narrations are deliverables, not scan noise.
+# A judge should be able to read them straight from the repo.
+!reports/COMPLIANCE.md
+!reports/*_narration.md
 .DS_Store

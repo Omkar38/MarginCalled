@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SHOW_ACCOUNT = False
 sys.path.insert(0, str(ROOT / "src"))
 
 
@@ -43,7 +44,13 @@ def account_evidence() -> tuple[dict, list[str]]:
     positions = ex.positions() or []
     orders = ex.open_orders() or []
     lines = [
-        f"- account number (last 4): `{str(acct.get('account_number', ''))[-4:]}`",
+        # Redacted by default. It is not a credential and unlocks nothing, but
+        # the competition repo is public and it is still an identifier, so the
+        # committed evidence should not carry it. --show-account restores it for
+        # a judge who wants to verify the account is the dedicated one.
+        (f"- account number (last 4): `{str(acct.get('account_number', ''))[-4:]}`"
+         if SHOW_ACCOUNT else
+         "- account number: redacted (run with --show-account to include)"),
         f"- status: `{acct.get('status')}`",
         f"- equity: **${float(acct.get('equity', 0)):,.2f}**",
         f"- cash: ${float(acct.get('cash', 0)):,.2f}",
@@ -244,7 +251,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default=None)
     ap.add_argument("--skip-tests", action="store_true")
+    ap.add_argument("--show-account", action="store_true",
+                    help="include the account number's last 4 digits")
     args = ap.parse_args()
+    global SHOW_ACCOUNT
+    SHOW_ACCOUNT = args.show_account
     _load_env()
 
     now = datetime.now().isoformat(timespec="seconds")
