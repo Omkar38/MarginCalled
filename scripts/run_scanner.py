@@ -323,7 +323,17 @@ class TradeContext:
         held = {sym for sym, q in signed.items() if q != 0}
         if not held:
             return
-        known = self.registry.held_symbols()
+        # Every leg the registry has EVER held, not just the open ones.
+        #
+        # held_symbols() reports open positions only. A position closed moments
+        # ago still sits at the broker until its closing order fills, so it
+        # looked unknown and was adopted straight back as a new position - the
+        # agent re-acquiring something it had just decided to exit, then trying
+        # to close it a second time. Two reverted positions came back this way.
+        known = set()
+        for p_ in self.registry.positions.values():
+            known.add(p_.long_symbol)
+            known.add(p_.short_symbol)
         missing = held - known
         if not missing:
             return

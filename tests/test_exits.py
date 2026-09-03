@@ -258,6 +258,32 @@ def test_held_symbols_is_what_guards_against_double_closing():
         assert "SPX261016C07000000" in held and "SPX261016C07050000" in held
 
 
+def test_a_closed_position_is_not_adopted_again():
+    """held_symbols() reports OPEN positions only, so a position closed moments
+    ago - still sitting at the broker until its closing order fills - looked
+    unknown to adoption and was taken back on as new. The agent re-acquired
+    something it had just exited and would have closed it twice. Adoption must
+    consult every position the registry has ever held."""
+    import tempfile as _tf
+    from pathlib import Path as _P
+
+    with _tf.TemporaryDirectory() as d:
+        reg = PositionRegistry(_P(d) / "p.jsonl")
+        reg.add(_pos())
+        reg.close("ep1", "close-1", "reverted", NOW)
+
+        assert reg.open_positions() == []
+        assert reg.held_symbols() == set(), "closed positions leave held_symbols"
+
+        ever_held = set()
+        for p in reg.positions.values():
+            ever_held.add(p.long_symbol)
+            ever_held.add(p.short_symbol)
+        assert "SPX261016C07000000" in ever_held, (
+            "the closed position must still be recognised, or it is adopted again"
+        )
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
