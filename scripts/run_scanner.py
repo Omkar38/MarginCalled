@@ -139,6 +139,12 @@ def _reprice(cand, client, feed: str):
     )
 
 
+def _expiry_of(occ_symbol: str) -> str:
+    """YYMMDD out of an OCC symbol -> ISO date. SPY260904C00783000 -> 2026-09-04."""
+    core = occ_symbol[-15:]
+    return f"20{core[0:2]}-{core[2:4]}-{core[4:6]}"
+
+
 def _determinant(cand) -> dict:
     """The inequality as it stood at the moment of the decision."""
     # normalized_severity divides by (lhs + rhs); the tick bound is a relative
@@ -259,6 +265,79 @@ class TradeContext:
                 # A cancelled order frees its slot for a freshly priced one.
                 if self.sent > 0:
                     self.sent -= 1
+
+    def adopt_orphans(self, ts, tracker=None) -> None:
+        """Add broker positions the registry does not know about.
+
+        reconcile() learns about fills through self.pending, which is in-memory.
+        Every restart empties it, so any order that filled across a restart left
+        a real position at the broker with no registry entry - and a position the
+        registry cannot see is one the exit logic will never close on reversion.
+        Five legs were found orphaned this way during a live session.
+
+        The broker is the source of truth, so filled multi-leg orders are read
+        back from it and adopted. Keyed on the short leg, matching how
+        episode_key is formed.
+        """
+        if self.executor is None:
+            return
+        held = {p.get("symbol") for p in (self.executor.positions() or [])}
+        if not held:
+            return
+        known = self.registry.held_symbols()
+        missing = held - known
+        if not missing:
+            return
+        status, orders = self.executor._request(
+            "GET", "/v2/orders?status=closed&limit=100&nested=true"
+        )
+        if not isinstance(orders, list):
+            return
+        for o in orders:
+            if float(o.get("filled_qty") or 0) <= 0:
+                continue
+            legs = o.get("legs") or []
+            if len(legs) != 2:
+                continue
+            longs = [l for l in legs if l.get("side") == "buy"]
+            shorts = [l for l in legs if l.get("side") == "sell"]
+            if not longs or not shorts:
+                continue
+            lsym, ssym = longs[0].get("symbol"), shorts[0].get("symbol")
+            if lsym not in missing and ssym not in missing:
+                continue
+            if ssym in known or lsym in known:
+                continue
+            # Recover the tracker's key for this leg pair, so the adopted
+            # position can be matched to its episode and exit on reversion.
+            ep_key = ssym
+            if tracker is not None:
+                for eid, ep in tracker.episodes.items():
+                    if ep.sym_D == ssym and ep.sym_A == lsym:
+                        ep_key = eid
+                        break
+            try:
+                pos = OpenPosition(
+                    episode_id=ep_key,
+                    underlying=self.underlying,
+                    denomination=self.structure.name,
+                    order_id=o.get("id"),
+                    opened_at=datetime.fromisoformat(
+                        (o.get("filled_at") or o.get("submitted_at"))[:19]
+                    ),
+                    long_symbol=lsym, short_symbol=ssym,
+                    long_expiry=date.fromisoformat(_expiry_of(lsym)),
+                    short_expiry=date.fromisoformat(_expiry_of(ssym)),
+                    entry_long_price=float(longs[0].get("filled_avg_price") or 0),
+                    entry_short_price=float(shorts[0].get("filled_avg_price") or 0),
+                    qty=int(float(o.get("filled_qty") or 1)),
+                )
+            except (TypeError, ValueError):
+                continue
+            pos.notes.append("adopted from the broker; not seen through pending")
+            self.registry.add(pos)
+            known = self.registry.held_symbols()
+            print(f"      ADOPTED {ssym} from broker (order {str(o.get('id'))[:8]})")
 
     def reconcile(self, ts) -> None:
         """Turn accepted orders into recorded positions.
@@ -497,7 +576,17 @@ class TradeContext:
                     except Exception:  # noqa: BLE001
                         oid = None
                 if oid:
-                    self.pending[cand.episode_key] = {"order_id": oid, "spec": spec}
+                    # Key on the tracker's episode id, NOT cand.episode_key.
+                    #
+                    # episode_key is the short leg's symbol; the tracker keys on
+                    # a hash of all four contracts, because two rectangles can
+                    # share a short leg. Storing the position under the wrong key
+                    # meant tracker.episodes.get(pos.episode_id) always returned
+                    # None, so should_exit saw an unknown status and held - and
+                    # REVERTED could never fire for any position.
+                    self.pending[episode_id(underlying, cand)] = {
+                        "order_id": oid, "spec": spec,
+                    }
                 self.audit.log(
                     underlying=underlying, episode_key=cand.episode_key,
                     outcome=Outcome.TRADED, stage="execution",
@@ -632,6 +721,7 @@ def scan_once(
     if trader is not None and trader.enabled:
         trader.feed = feed.feed
         trader.cancel_stale(ts)
+        trader.adopt_orphans(ts, tracker)
         trader.reconcile(ts)
         trader.manage_exits(ts, tracker)
         if gated:

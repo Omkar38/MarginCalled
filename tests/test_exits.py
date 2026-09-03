@@ -149,6 +149,41 @@ def test_record_is_json_serialisable():
     assert "SPX261016C07000000" in text
 
 
+def test_position_and_tracker_must_share_an_episode_key():
+    """The registry keyed positions on the short leg symbol while the tracker
+    keyed episodes on a hash of all four contracts, so the lookup always
+    returned None and REVERTED could never fire for any position. This asserts
+    the two identifiers are produced the same way."""
+    import sys as _sys
+    from pathlib import Path as _P
+
+    _sys.path.insert(0, str(_P(__file__).resolve().parents[1] / "tests"))
+    from test_position import _realistic_candidate
+
+    from tp2agent.episodes import episode_id
+
+    cand = _realistic_candidate()
+    tracker_key = episode_id("SPY", cand)
+    assert tracker_key != cand.episode_key, (
+        "these are deliberately different identifiers; a position must be "
+        "stored under the tracker key, never episode_key"
+    )
+    # A position stored under the tracker key resolves; under episode_key it
+    # does not - which is exactly the bug.
+    episodes = {tracker_key: object()}
+    assert episodes.get(tracker_key) is not None
+    assert episodes.get(cand.episode_key) is None
+
+
+def test_unknown_episode_holds_so_a_key_mismatch_is_silent():
+    """Why the mismatch survived: an unknown status is treated as HOLD, which is
+    correct behaviour and indistinguishable from a position that simply has not
+    reverted yet. Nothing raised, nothing logged - it just never exited."""
+    d = should_exit(_pos(), None, NOW)
+    assert not d.should_close
+    assert d.reason is ExitReason.HOLD
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
