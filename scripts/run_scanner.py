@@ -468,7 +468,23 @@ class TradeContext:
                     risk=decision.to_record(),
                 )
                 continue
-            plan = build_order(spec, self.policy)
+            # Price the order from the SAME fresh quotes revalidation just used.
+            #
+            # These were re-priced a moment ago to confirm the violation still
+            # holds, and then the order was built from the original detection
+            # snapshot anyway - so the limit reflected quotes that were already
+            # known to be stale. Live, that put every order about three cents
+            # under the market, which on a five-cent package is sixty per cent
+            # and guarantees a non-fill.
+            priced_spec = spec
+            if fresh is not None:
+                try:
+                    priced_spec = build_position(fresh, config_for(underlying))
+                    if not priced_spec.is_executable:
+                        priced_spec = spec
+                except Exception:  # noqa: BLE001
+                    priced_spec = spec
+            plan = build_order(priced_spec, self.policy)
             record["order"] = plan.to_record()
             try:
                 result = self.executor.submit(plan, decision, dry_run=self.dry_run)
@@ -534,6 +550,7 @@ def scan_once(
     certain_through: date | None = None,
     trader: "TradeContext | None" = None,
     exec_coverage: float = 1.25,
+    min_leg_mid: float = 0.50,
 ) -> dict:
     started = time.monotonic()
     ts = datetime.now()
@@ -573,7 +590,8 @@ def scan_once(
             )
         )
         categories[episode_id(underlying, cand)] = gate.category.value
-        flags = tradability_flags(cand, max_coverage_ratio=exec_coverage)
+        flags = tradability_flags(cand, max_coverage_ratio=exec_coverage,
+                                  min_leg_mid=min_leg_mid)
         if flags.tradable:
             n_tradable += 1
             if gate.is_tradable:
@@ -683,6 +701,12 @@ def main() -> int:
     # stays covered and defined-risk at any ratio, it just captures less of the
     # violation the further the true ratio sits from 1. So loosening this admits
     # trades that deviate more from the paper, not trades that carry naked risk.
+    # Cheapest leg the execution screen will accept. Penny legs are where a
+    # single tick is a large fraction of the leg's value, so the default keeps
+    # them out - but they are also where the remaining violations live, and
+    # their dollar risk is correspondingly small.
+    ap.add_argument("--min-leg-mid", type=float, default=0.50,
+                    help="cheapest acceptable leg mid (default 0.50)")
     ap.add_argument("--exec-coverage", type=float, default=1.25,
                     help="max theoretical short/long weight ratio to still trade "
                          "1:1 (default 1.25; higher admits looser approximations)")
@@ -805,6 +829,7 @@ def main() -> int:
                     client, store, cfg, underlying, expiries, tracker,
                     dividends, certain_through, trader,
                     exec_coverage=args.exec_coverage,
+                    min_leg_mid=args.min_leg_mid,
                 )
                 scans += 1
             except AlpacaError as exc:

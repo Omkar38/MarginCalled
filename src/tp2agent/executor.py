@@ -195,7 +195,13 @@ def build_order(
         spread += abs(quote[1] - quote[0]) * leg.ratio_qty
         legs.append(leg.to_alpaca_leg())
 
-    shade = max(policy.shade_spreads * spread, policy.min_shade_abs)
+    # shade_spreads == 0 means "take the quoted price", so the one-tick floor is
+    # not applied. On the penny packages where the remaining violations live, a
+    # tick is a fifth of the package and the floor alone guarantees a non-fill.
+    if policy.shade_spreads <= 0.0:
+        shade = 0.0
+    else:
+        shade = max(policy.shade_spreads * spread, policy.min_shade_abs)
     # Never let the shade carry the limit across zero. Applied after the tick
     # floor so the clamp wins: a one-tick shade on a half-tick package would
     # otherwise still invert it.

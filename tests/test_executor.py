@@ -96,8 +96,21 @@ def test_bigger_spread_demands_bigger_concession():
 
 
 def test_shade_never_below_one_tick():
-    plan = build_order(_spec(), LimitPolicy(shade_spreads=0.0, min_shade_abs=0.01))
+    """The tick floor applies whenever any shading is requested."""
+    plan = build_order(_spec(), LimitPolicy(shade_spreads=1e-9, min_shade_abs=0.01))
     assert plan.shade >= 0.01
+
+
+def test_shade_zero_means_take_the_quoted_price():
+    """Explicitly asking for no shade must produce no shade.
+
+    The tick floor used to apply even at shade_spreads=0. On the penny packages
+    where the remaining violations live, a tick is a fifth of the package, so
+    the floor alone put every order under the market and guaranteed a non-fill.
+    """
+    plan = build_order(_spec(), LimitPolicy(shade_spreads=0.0, min_shade_abs=0.01))
+    assert plan.shade == 0.0
+    assert abs(plan.limit_price - round(plan.indicative_net, 2)) < 0.011
 
 
 def test_limit_is_rounded_to_a_tick():
