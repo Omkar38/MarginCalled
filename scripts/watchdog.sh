@@ -12,7 +12,7 @@
 
 cd "$(dirname "$0")/.." || exit 1
 STALE_MIN=${STALE_MIN:-12}
-ARGS="--interval 300 --market-hours --min-dte 0 --max-dte 400 --max-expiries 40 --trade --live-orders --shade 0.0 --max-orders 5 --min-moneyness 0.50 --max-moneyness 1.50 --require-greeks"
+ARGS="--interval 120 --market-hours --min-dte 0 --max-dte 400 --max-expiries 40 --trade --live-orders --shade 0.0 --max-orders 5 --max-spread 0.10 --min-moneyness 0.50 --max-moneyness 1.50 --require-greeks --exec-coverage 2.5"
 
 in_market_hours() {
   local h m dow
@@ -26,7 +26,7 @@ in_market_hours() {
 
 while true; do
   if in_market_hours; then
-    for u in SPX SPY XSP; do
+    for u in SPY; do
       f="data/$u/scans.csv"
       [ -f "$f" ] || continue
       last=$(tail -1 "$f" | cut -d, -f1)

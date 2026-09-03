@@ -223,7 +223,7 @@ class TradeContext:
             self.mcp.stop()
             self.mcp = None
 
-    def cancel_stale(self, ts, max_age_minutes: float = 6.0) -> None:
+    def cancel_stale(self, ts, max_age_minutes: float = 3.0) -> None:
         """Cancel working orders priced off quotes that have since moved.
 
         An unfilled order is not free: it rests all day at whatever the package
@@ -494,6 +494,7 @@ def scan_once(
     dividends: list[Dividend] | None = None,
     certain_through: date | None = None,
     trader: "TradeContext | None" = None,
+    exec_coverage: float = 1.25,
 ) -> dict:
     started = time.monotonic()
     ts = datetime.now()
@@ -533,7 +534,7 @@ def scan_once(
             )
         )
         categories[episode_id(underlying, cand)] = gate.category.value
-        flags = tradability_flags(cand)
+        flags = tradability_flags(cand, max_coverage_ratio=exec_coverage)
         if flags.tradable:
             n_tradable += 1
             if gate.is_tradable:
@@ -637,6 +638,15 @@ def main() -> int:
     # themselves the anomaly and reverted immediately. The papers impose no
     # moneyness band, so the default stays wide; narrow it to trade only the
     # region where the feed behaves.
+    # Execution-side coverage screen. The theoretical weights want more short
+    # than long (C_w > B_w always), so trading 1:1 SHORT-changes the theory - we
+    # end up long-biased relative to it. That is the safe direction: the package
+    # stays covered and defined-risk at any ratio, it just captures less of the
+    # violation the further the true ratio sits from 1. So loosening this admits
+    # trades that deviate more from the paper, not trades that carry naked risk.
+    ap.add_argument("--exec-coverage", type=float, default=1.25,
+                    help="max theoretical short/long weight ratio to still trade "
+                         "1:1 (default 1.25; higher admits looser approximations)")
     ap.add_argument("--require-greeks", action="store_true",
                     help="only trade contracts Alpaca publishes greeks for; a "
                          "missing delta marks a contract the feed does not model")
@@ -755,6 +765,7 @@ def main() -> int:
                 scan_once(
                     client, store, cfg, underlying, expiries, tracker,
                     dividends, certain_through, trader,
+                    exec_coverage=args.exec_coverage,
                 )
                 scans += 1
             except AlpacaError as exc:
