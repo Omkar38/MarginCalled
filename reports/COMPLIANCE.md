@@ -1,6 +1,6 @@
 # Compliance evidence pack
 
-Generated `2026-09-02T23:35:17` by `scripts/compliance_report.py`.
+Generated `2026-09-03T16:56:57` by `scripts/compliance_report.py`.
 
 Every figure below is read from live state — the broker account, the running processes, the audit log, the test suite — not asserted. Re-run the script to reproduce it.
 
@@ -27,11 +27,9 @@ Judging is on **P&L performance, technology implementation, creativity and origi
 
 - order transport: **MCP** (`Executor(transport=Transport.MCP)`)
 - toolsets requested: `account,assets,market_info,trading`
-- live `alpaca-mcp-server` processes: **3**
+- live `alpaca-mcp-server` processes: **1**
 - scanner wires MCP for orders: `True`
-    - `66178 /opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/C`
-    - `66179 /opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/C`
-    - `66180 /opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/C`
+    - `85750 /opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/C`
 
 ---
 
@@ -39,11 +37,11 @@ Judging is on **P&L performance, technology implementation, creativity and origi
 
 - account number: redacted (run with --show-account to include)
 - status: `ACTIVE`
-- equity: **$100,000.00**
-- cash: $100,000.00
+- equity: **$99,963.00**
+- cash: $99,953.00
 - options approved level: **3**
 - trading blocked: `False`
-- open positions: **0**
+- open positions: **3**
 - open orders: **0**
 - endpoint: `https://paper-api.alpaca.markets` (paper only; the live host is refused in code)
 
@@ -111,11 +109,11 @@ If the language model hallucinated entirely, the trades that happened would stil
 
 ## 6. Decision audit trail
 
-- **SPY**: 5335 decisions — not_executable 4261, risk_rejected 24, theory_blocked 1047, traded 3
-- **SPX**: 8508 decisions — not_executable 6845, risk_rejected 1658, traded 5
-- **XSP**: 1098 decisions — not_executable 999, risk_rejected 96, traded 3
+- **SPY**: 10923 decisions — not_executable 8506, order_failed 15, risk_rejected 383, theory_blocked 1969, traded 50
+- **SPX**: 18920 decisions — not_executable 13466, order_failed 3, risk_rejected 5424, traded 27
+- **XSP**: 2662 decisions — not_executable 1974, risk_rejected 671, traded 17
 
-**14941 decisions logged**, each with the quotes, the determinant, the theory category and every risk gate that ran. Refusals are recorded as fully as fills.
+**32505 decisions logged**, each with the quotes, the determinant, the theory category and every risk gate that ran. Refusals are recorded as fully as fills.
 
 ---
 
