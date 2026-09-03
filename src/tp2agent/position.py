@@ -372,6 +372,39 @@ def config_for(underlying: str, **kwargs) -> "PositionConfig":
 def theoretical_weights(cand: RectangleCandidate) -> tuple[float, float]:
     """(B_w, C_w) - the paper's price weights for the T1 denomination.
 
+    WHY THESE ARE COMPUTED AND THEN NOT USED AS QUANTITIES
+
+    Glasserman, Li & Pirjol section 5.1: "in the T1-denominated strategy, we go
+    long C(K2, T2) shares of a (K1, T1)-Call, and we short C(K~1, T2) shares of
+    a (K~2, T1)-Call." The quantities are the other contracts' prices, which is
+    exactly what this function returns.
+
+    They cannot be traded. The ordering condition gives K~1 < K2, so C is the
+    lower strike at T2 and therefore always dearer than B: C_w > B_w for every
+    rectangle, without exception. The position is consequently always
+    short-heavy, and the surplus shorts are naked calls.
+
+    Verified live rather than assumed. Submitting long 1 : short 2 returns
+
+        HTTP 403, code 40310000
+        "account not eligible to trade uncovered option contracts"
+
+    Options level 3 permits spreads; naked shorts need level 4. No rescaling
+    helps - if short/long exceeds 1 it exceeds 1 at 2:3, 4:6 and every other
+    multiple - so 1:1 is not the closest covered approximation, it is the only
+    one.
+
+    The paper is candid that this is idealised: "We assume that one can trade
+    fractions of units of each option. In practice the positions may have to be
+    rescaled and adjusted to the closest integers. We ignore the complications
+    arising from this constraint."
+
+    What the cap costs: at the true weights the package is near self-financing
+    and the opening credit equals the violation. At 1:1 we under-short, so the
+    position is long-biased and captures only part of it. The distortion is
+    negligible when C_w/B_w is near 1 and large when it is not, which is what
+    the coverage-ratio screen measures.
+
     B_w sits on the long leg A, C_w on the short leg D. C_w > B_w always, because
     C is the lower strike at the shared maturity T2 and therefore the dearer leg.
     """
