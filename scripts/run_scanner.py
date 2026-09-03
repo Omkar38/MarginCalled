@@ -223,6 +223,43 @@ class TradeContext:
             self.mcp.stop()
             self.mcp = None
 
+    def cancel_stale(self, ts, max_age_minutes: float = 6.0) -> None:
+        """Cancel working orders priced off quotes that have since moved.
+
+        An unfilled order is not free: it rests all day at whatever the package
+        cost when it was built, while the market walks away from it. Three
+        resting orders were observed 50-86% below the current indicative net,
+        one of them by 96 points - they could not have filled at any point after
+        the first minute, and they crowded out the position slots.
+
+        Cancelling lets the next scan re-price at the current market, which is
+        what makes a 5-minute scan interval mean anything.
+        """
+        if self.executor is None:
+            return
+        for o in (self.executor.open_orders() or []):
+            sub = (o.get("submitted_at") or "")[:19]
+            if not sub:
+                continue
+            try:
+                age = (ts - datetime.fromisoformat(sub)).total_seconds() / 60.0
+            except ValueError:
+                continue
+            if age >= max_age_minutes:
+                oid = o.get("id")
+                st, _ = self.executor.cancel(oid)
+                print(f"      CANCEL stale order {str(oid)[:8]} ({age:.0f}m old)")
+                self.audit.log(
+                    underlying=self.underlying, outcome=Outcome.ORDER_FAILED,
+                    stage="execution", episode_key="",
+                    reason=f"cancelled unfilled after {age:.0f} minutes; its limit was "
+                           f"priced off quotes that have since moved",
+                    broker={"order_id": oid, "status": f"cancel_requested ({st})"},
+                )
+                # A cancelled order frees its slot for a freshly priced one.
+                if self.sent > 0:
+                    self.sent -= 1
+
     def reconcile(self, ts) -> None:
         """Turn accepted orders into recorded positions.
 
@@ -536,6 +573,7 @@ def scan_once(
 
     if trader is not None and trader.enabled:
         trader.feed = feed.feed
+        trader.cancel_stale(ts)
         trader.reconcile(ts)
         trader.manage_exits(ts, tracker)
         if gated:
