@@ -369,7 +369,9 @@ def config_for(underlying: str, **kwargs) -> "PositionConfig":
     return PositionConfig(structure=structure_for(underlying), **kwargs)
 
 
-def theoretical_weights(cand: RectangleCandidate) -> tuple[float, float]:
+def theoretical_weights(
+    cand: RectangleCandidate, structure: "Structure | None" = None
+) -> tuple[float, float]:
     """(B_w, C_w) - the paper's price weights for the T1 denomination.
 
     WHY THESE ARE COMPUTED AND THEN NOT USED AS QUANTITIES
@@ -408,6 +410,11 @@ def theoretical_weights(cand: RectangleCandidate) -> tuple[float, float]:
     B_w sits on the long leg A, C_w on the short leg D. C_w > B_w always, because
     C is the lower strike at the shared maturity T2 and therefore the dearer leg.
     """
+    if structure is Structure.K2:
+        # Table 5.1, K2 row: long C(K1,T1) shares of the (K2,T2)-Call, short
+        # C(K~1,T2) shares of the (K~2,T1)-Call. The long weight is A's price,
+        # not B's - returning B for both denominations was simply wrong for K2.
+        return cand.A.quote.mid, cand.C.quote.mid
     return cand.B.quote.mid, cand.C.quote.mid
 
 
@@ -441,7 +448,7 @@ def build_position(
     quantities actually being sent, never inherited from the theoretical weights.
     """
     cfg = cfg or PositionConfig()
-    long_w, short_w = theoretical_weights(cand)
+    long_w, short_w = theoretical_weights(cand, cfg.structure)
 
     spec = PositionSpec(
         candidate=cand,

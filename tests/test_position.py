@@ -521,6 +521,35 @@ def test_a_normal_debit_spread_is_untouched_by_the_intrinsic_floor():
     assert "below intrinsic" not in (spec.rejected_reason or "")
 
 
+def test_k2_long_weight_is_A_not_B():
+    """Table 5.1, K2 row: long C(K1,T1) shares of the (K2,T2)-Call. The long
+    weight is A's price. theoretical_weights returned B's for both
+    denominations, which is right for T1 and wrong for K2."""
+    from tp2agent.position import theoretical_weights
+
+    c = _realistic_candidate()
+    t1_long, t1_short = theoretical_weights(c, Structure.T1)
+    k2_long, k2_short = theoretical_weights(c, Structure.K2)
+    assert t1_long == c.B.quote.mid, "T1 long weight is C(K2,T2) = B"
+    assert k2_long == c.A.quote.mid, "K2 long weight is C(K1,T1) = A"
+    assert t1_short == k2_short == c.C.quote.mid, "both short C(K~1,T2) = C"
+
+
+def test_both_traded_denominations_are_short_heavy():
+    """The structural reason 1:1 is forced: T1 and K2 - the two denominations
+    the study finds profitable - both short more than they buy, so both need
+    naked calls. The two that are coverable are the two that lose money."""
+    from tp2agent.position import theoretical_weights
+
+    c = _realistic_candidate()
+    for structure in (Structure.T1, Structure.K2):
+        long_w, short_w = theoretical_weights(c, structure)
+        assert short_w > long_w, (
+            f"{structure.name} is short-heavy by construction; a covered "
+            f"whole-contract version cannot exist"
+        )
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
