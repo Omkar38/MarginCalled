@@ -31,4 +31,5 @@ reports/*
 # A judge should be able to read them straight from the repo.
 !reports/COMPLIANCE.md
 !reports/*_narration.md
+!reports/BACKTEST_SIZING.md
 .DS_Store
