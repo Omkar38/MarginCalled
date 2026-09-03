@@ -32,7 +32,11 @@ while true; do
       last=$(tail -1 "$f" | cut -d, -f1)
       last_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${last%.*}" "+%s" 2>/dev/null) || continue
       age=$(( ( $(date +%s) - last_epoch ) / 60 ))
-      if [ "$age" -ge "$STALE_MIN" ]; then
+      # Only restart if it is really gone or really stale. Restarting a
+      # healthy scanner races a manual start and leaves two processes on one
+      # underlying, both placing orders and both managing the same positions.
+      running=$(pgrep -f "run_scanner.py --underlying $u" | wc -l | tr -d ' ')
+      if [ "$age" -ge "$STALE_MIN" ] || [ "$running" -eq 0 ]; then
         echo "$(date '+%F %T')  $u stale ${age}m -> restarting" >> logs/watchdog.log
         pkill -f "run_scanner.py --underlying $u"
         sleep 2
