@@ -183,4 +183,4 @@ Every row assumes a fill at the quoted price on every signal. Live, ~3% filled �
 
 ## License
 
-[MIT](LICENSE) © 2026 Omkar Lashkare and the MarginCalled contributors.
+[MIT](LICENSE) © 2026 Omkar Lashkare, Jyotir Patel and Powel Polak.
