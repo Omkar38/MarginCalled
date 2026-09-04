@@ -317,57 +317,66 @@ is a result in itself and should be shown next to these numbers.
 
 ---
 
-## 4d. Why the live account lost money — the most important page
+## 4d. Why the live account lost money — one reason
 
-The backtest returns about **+$2 per trade**. The live account returned about
-**-$2 per round trip**. Same strategy, same day, same signals. The reason is not
-the sizing and not the 1:1 constraint.
+**The bid-ask spread. Nothing else.**
 
-**The edge and the cost of capturing it are the same size.**
+Alpaca charged nothing. Verified on the account: `accrued_fees: 0`, no
+commission field on any filled order, and fills routinely came in *better* than
+the limit asked — one order with a `-0.03` limit filled at `-0.06`. The broker
+gave price improvement, not friction.
+
+The cost is market structure. You buy at the ask and sell at the bid, and the
+difference is what a market maker earns for standing there. On these contracts:
 
 ```
 SPY leg spreads, 5,786 observations on 2026-09-03
    A leg median  $0.010
    D leg median  $0.010
-   crossing both legs, in and out:  $0.020/share = $2 per contract
+   two legs, in and out                 = $0.020/share = $2 per contract
 
-backtest median profit per trade   +$2
-live median loss per round trip    -$2
+backtest median profit per trade        = +$2 per contract
 ```
 
-A ~2-cent inefficiency really is there — 21 of 21 live positions closed because
-the violation **reverted**, exactly as the thesis predicts. But it costs ~2 cents
-to cross the spread twice to collect it, so execution decides the sign.
+**The edge and the cost of collecting it are the same number.** A ~2-cent
+mispricing exists and does correct — 21 of 21 live positions closed because the
+violation reverted — but crossing the spread twice to capture it costs ~2 cents.
 
-Live lands on the wrong side of that coin flip for a structural reason:
+That leaves the sign to execution, and a resting limit order loses that coin
+flip by construction: **a limit buy fills only when the market comes down to
+it.** The backtest assumes a fill at the quoted price on all 672 signals; the
+agent got 21, and those 21 are precisely the ones already moving against the
+position. On penny options a single tick is 20-30% of the contract's value, so
+there is no room for that to average out.
 
-- The backtest assumes a fill at the quoted price on **all 672** signals. The
-  live agent filled **21** — about 3%.
-- A limit buy only fills when the market comes **down** to it. The fills you get
-  are therefore the ones where the trade was already moving against you. That is
-  adverse selection, and it is not a bug: it is what a resting limit order is.
+### Exact backtest P&L, both denominations
 
-**A caution about the scaled figure in section 4c.** The "+$35,293 at 10x" number
-inherits the backtest's +$2 per trade. Scaling multiplies whatever the true
-per-contract result is - if that is really -$2, then 10x is **-$20 a trade, not
-+$45**. Size amplifies a sign; it does not create one. Show the scaled row only
-alongside the live result, never on its own.
+Same filters as live, no look-ahead, entry and exit both crossing the spread.
+Weighted sizing is Table 5.1 normalised so the long leg is one contract and the
+short leg the nearest whole number, because a market cannot sell 1.74 contracts.
 
-**What would actually change the outcome**, in order of honesty:
+| denomination | sizing | trades | total | mean | median | win |
+|---|---|---|---|---|---|---|
+| **T1** (long A, short D) | unit 1:1 | 672 | **+$9,829** | +$14.63 | +$2.00 | 67% |
+| **T1** | study weights | 386 | **+$8,754** | +$22.68 | +$1.00 | 65% |
+| **K2** (long B, short D) | unit 1:1 | 748 | **-$5,363** | -$7.17 | $0.00 | 49% |
+| **K2** | study weights | 312 | **-$5,775** | -$18.51 | -$1.00 | 43% |
 
-1. **Tighter spreads.** The edge is fixed at a couple of cents; the cost is not.
-   OPRA data and more liquid strikes would shrink the denominator.
-2. **Passive entry.** Resting inside the spread rather than crossing it turns a
-   2-cent cost into something smaller, at the price of fewer fills.
-3. **Not this instrument.** On penny options a one-tick spread is 20-30% of the
-   contract's value. The same strategy on contracts worth dollars rather than
-   cents faces a far smaller proportional cost.
+Two things to say about this honestly:
 
-This is the honest headline of the project: **the signal is real and the
-execution cost eats it.** That is a more useful result than a backtest number,
-and it is the thing worth putting in front of a judge.
+- **T1 is profitable in backtest and K2 is not**, though the study reports both
+  performing well. The difference is the exit: the study holds every position to
+  expiration, this agent exits on reversion. K2 is a diagonal whose legs expire
+  on different dates, so closing it early is a materially different trade.
+- **All four figures assume a fill on every signal.** Live, 3% filled, and the
+  realised result was about -$45 across 21 round trips. The gap between any row
+  above and that number is the execution cost, not a modelling error.
 
----
+Reproduce:
+```
+python3 scripts/backtest_weighted.py --underlying SPY --denom T1 --sizing weighted
+python3 scripts/backtest_weighted.py --underlying SPY --denom K2 --sizing weighted
+```
 
 ## 5. Suggested pages
 

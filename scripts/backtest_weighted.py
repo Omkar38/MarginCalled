@@ -29,6 +29,7 @@ from pathlib import Path
 MULT = 100.0
 SIZING = "weighted"
 MAX_SCALE = 10          # liquidity ceiling on how far 1:1 may be scaled
+DENOM = "T1"            # which denomination to trade: T1 (A,D) or K2 (B,D)
 
 
 def _f(row, key):
@@ -95,8 +96,9 @@ def run(underlying: str, day: str, equity: float, max_loss_pct: float,
         if entry is None or exit_ is None:
             rejected["no entry/exit quote"] += 1
             continue
-        la, sb = _f(entry, "A_ask"), _f(entry, "D_bid")
-        lb, sa = _f(exit_, "A_bid"), _f(exit_, "D_ask")
+        long_sym = "A" if DENOM == "T1" else "B"
+        la, sb = _f(entry, f"{long_sym}_ask"), _f(entry, "D_bid")
+        lb, sa = _f(exit_, f"{long_sym}_bid"), _f(exit_, "D_ask")
         bb, ba = _f(entry, "B_bid"), _f(entry, "B_ask")
         cb, ca = _f(entry, "C_bid"), _f(entry, "C_ask")
         if None in (la, sb, lb, sa, bb, ba, cb, ca):
@@ -105,7 +107,17 @@ def run(underlying: str, day: str, equity: float, max_loss_pct: float,
 
         # Study weights, normalised so the long leg is one contract and the
         # short leg is the nearest whole number - the paper's own instruction.
-        b_mid, c_mid = (bb + ba) / 2, (cb + ca) / 2
+        # Table 5.1. T1: long A in C(K2,T2)=B units, short D in C(K~1,T2)=C units.
+        # K2: long B in C(K1,T1)=A units, short D in the same C units.
+        if DENOM == "T1":
+            b_mid = (bb + ba) / 2
+        else:
+            ab, aa = _f(entry, "A_bid"), _f(entry, "A_ask")
+            if None in (ab, aa):
+                rejected["no entry/exit quote"] += 1
+                continue
+            b_mid = (ab + aa) / 2
+        c_mid = (cb + ca) / 2
         if b_mid <= 0:
             rejected["no entry/exit quote"] += 1
             continue
@@ -154,7 +166,7 @@ def run(underlying: str, day: str, equity: float, max_loss_pct: float,
     label = {"weighted": "study weights (integer-rounded)",
              "unit": "unit 1:1 (as traded)",
              "scaled": "1:1 scaled to the risk cap"}[SIZING]
-    print(f"{underlying} T1 — {label} through the live filters"
+    print(f"{underlying} {DENOM} — {label} through the live filters"
           f"{' on ' + day if day else ''}")
     print(f"  reverted episodes considered : {len(eps)}")
     for k, v in sorted(rejected.items(), key=lambda x: -x[1]):
@@ -189,6 +201,8 @@ def main() -> int:
     ap.add_argument("--max-positions", type=int, default=5)
     ap.add_argument("--coverage", type=float, default=15.0)
     ap.add_argument("--min-leg", type=float, default=0.03)
+    ap.add_argument("--denom", default="T1", choices=("T1","K2"),
+                    help="T1 trades legs (A,D); K2 trades legs (B,D)")
     ap.add_argument("--max-scale", type=int, default=10,
                     help="liquidity ceiling for --sizing scaled (default 10)")
     ap.add_argument("--sizing", default="weighted",
@@ -197,9 +211,10 @@ def main() -> int:
                          "unit = 1:1 single contract (what was traded); "
                          "scaled = 1:1 multiplied up to the risk cap")
     a = ap.parse_args()
-    global SIZING, MAX_SCALE
+    global SIZING, MAX_SCALE, DENOM
     SIZING = a.sizing
     MAX_SCALE = a.max_scale
+    DENOM = a.denom
     run(a.underlying, a.day, a.equity, a.max_loss_pct, a.max_positions,
         a.coverage, a.min_leg)
     return 0
