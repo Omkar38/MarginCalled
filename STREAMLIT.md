@@ -464,6 +464,76 @@ The thing that actually cost money was the bid-ask spread (section 4d).
 
 ---
 
+## 4g. Complete results, and every reason the portfolio stayed small
+
+**The authoritative document is `PROJECT_REPORT.md` (also `reports/PROJECT_REPORT.pdf`).**
+Everything below is the short form for the dashboard; the report has the
+derivations.
+
+### Project totals
+
+| | |
+|---|---|
+| rectangles considered | **192,008,262** |
+| violations detected | **17,097** |
+| episodes tracked | **43,566** |
+| **episodes reverted** | **42,687 — 98%** |
+| median time to revert | **~11 minutes** |
+| decisions logged | **32,505** |
+| orders placed / filled | 131 / 40 |
+| completed round-trips | **21, all closed on reversion** |
+| broker fees | **$0.00** |
+| final equity | **$99,963** (from $100,000) |
+
+### Full backtest matrix (SPY, 3 Sep, identical live filters, no look-ahead)
+
+| denomination | sizing | trades | total | mean | median | win |
+|---|---|---|---|---|---|---|
+| **T1** | unit 1:1 | 672 | **+$9,829** | +$14.63 | +$2.00 | 67% |
+| **T1** | paper weights | 386 | **+$8,754** | +$22.68 | +$1.00 | 65% |
+| **T1** | 1:1 scaled 10x | 672 | **+$30,878** | +$45.95 | +$3.00 | 67% |
+| **K2** | unit 1:1 | 748 | **-$5,363** | -$7.17 | $0.00 | 49% |
+| **K2** | paper weights | 312 | **-$5,775** | -$18.51 | -$1.00 | 43% |
+| **K2** | 1:1 scaled 10x | 748 | **-$84,249** | -$112.63 | $0.00 | 49% |
+
+**Never show a backtest row without the live result beside it.** All six assume a
+fill on every signal; 3% actually filled, for **-$45** realised.
+
+Why paper weights trade less — one gate, and the difference matches exactly:
+
+| filter | unit rejects | weighted rejects |
+|---|---|---|
+| theory gate | 3,579 | 3,579 |
+| cheapest leg | 95 | 95 |
+| coverage ratio | 67 | 67 |
+| **max loss > 2.5% equity** | **76** | **362** |
+| survived | **672** | **386** |
+
+A covered 1:1 spread cannot lose more than its debit (median **$2**). One naked
+short makes the loss width-scaled (median **$700**) - 350x the measured risk - so
+the cap refuses it.
+
+### Every reason the portfolio stayed small, ranked
+
+1. **The edge and its collection cost are the same size.** A ~2c mispricing that
+   costs ~2c to cross twice. *This explains the loss by itself.*
+2. **Adverse selection.** A resting limit buy fills only when the market comes
+   down to it; 3% filled, and those are the ones already moving against us.
+3. **The indicative feed is not the market.** At a 10% spread screen: 21,109
+   contracts measured, **zero violations**.
+4. **Two of three underlyings were untradeable.** No greeks at any strike for SPX
+   or XSP; SPX quoted fully-ITM spreads at 57-68% of intrinsic.
+5. **The dividend horizon** correctly blocked 1,969 SPY candidates whose far leg
+   expired past 21 September.
+6. **Options level 3 forced 1:1** - which **cost nothing and helped** (section 4f).
+7. **~1.5 sessions** of live trading; live began nine minutes before a close.
+8. **Defects found while live** - fourteen, catalogued in the report.
+
+**None of these say the strategy is wrong.** 98% of violations reverted, on
+schedule, and all 21 live positions closed on their thesis.
+
+---
+
 ## 5. Suggested pages
 
 1. **Overview** — equity, realised P&L, positions open, round-trips today, win
