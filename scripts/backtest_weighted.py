@@ -28,6 +28,7 @@ from pathlib import Path
 
 MULT = 100.0
 SIZING = "weighted"
+MAX_SCALE = 10          # liquidity ceiling on how far 1:1 may be scaled
 
 
 def _f(row, key):
@@ -97,8 +98,20 @@ def run(underlying: str, day: str, equity: float, max_loss_pct: float,
         if b_mid <= 0:
             rejected["no entry/exit quote"] += 1
             continue
+        # Three sizings.
+        #   unit      1:1, one contract a leg - what the agent traded
+        #   weighted  the study's ratio, rounded to whole contracts. The study
+        #             says positions "may have to be rescaled and adjusted to
+        #             the closest integers"; a market cannot sell 1.74 contracts
+        #   scaled    1:1, multiplied up until the risk cap binds. The RATIO is
+        #             what the broker forbids, never the SIZE, and at a median
+        #             max loss of $4 against a $2,500 cap the agent was using
+        #             about 1/625th of the budget available to it
         n_long = 1
-        n_short = 1 if SIZING == "unit" else max(1, round(c_mid / b_mid))
+        if SIZING == "weighted":
+            n_short = max(1, round(c_mid / b_mid))
+        else:
+            n_short = 1
 
         debit = la * n_long - sb * n_short
         # Max loss for a short-heavy call spread is unbounded above the short
@@ -107,15 +120,29 @@ def run(underlying: str, day: str, equity: float, max_loss_pct: float,
         k_long, k_short = _f({"v": ep["K1"]}, "v"), _f({"v": ep["K2_adj"]}, "v")
         width = (k_short - k_long) if (k_long and k_short) else 0.0
         naked = max(n_short - n_long, 0)
-        est_max_loss = (max(debit, 0.0) + width * n_long + width * naked) * MULT
+        # A covered 1:1 call spread cannot lose more than its debit - the long
+        # lower strike caps the short higher one. Only the UNCOVERED excess adds
+        # width-scaled risk. Charging width to the covered part overstated the
+        # 1:1 max loss by two orders of magnitude ($806 against a real $4).
+        est_max_loss = (max(debit, 0.0) + width * naked) * MULT
         if est_max_loss > cap:
             rejected[f"max loss > {max_loss_pct:.1%} equity"] += 1
             continue
 
-        pnl = ((lb - la) * n_long + (sb - sa) * n_short) * MULT
-        rows.append((pnl, n_short, est_max_loss))
+        scale = 1
+        if SIZING == "scaled" and est_max_loss > 0:
+            by_risk = int(cap // est_max_loss)
+            # Liquidity, not just risk. These are penny options quoting one or
+            # two lots; assuming a 600-contract fill because the risk budget
+            # allows it would be fantasy. MAX_SCALE is a blunt stand-in for
+            # displayed size and is the binding constraint in practice.
+            scale = max(1, min(by_risk, MAX_SCALE))
+        pnl = ((lb - la) * n_long + (sb - sa) * n_short) * MULT * scale
+        rows.append((pnl, n_short, est_max_loss * scale, scale))
 
-    label = "study weights" if SIZING == "weighted" else "unit sizing (1:1)"
+    label = {"weighted": "study weights (integer-rounded)",
+             "unit": "unit 1:1 (as traded)",
+             "scaled": "1:1 scaled to the risk cap"}[SIZING]
     print(f"{underlying} T1 — {label} through the live filters"
           f"{' on ' + day if day else ''}")
     print(f"  reverted episodes considered : {len(eps)}")
@@ -134,6 +161,12 @@ def run(underlying: str, day: str, equity: float, max_loss_pct: float,
     print(f"  worst {min(pnl):>14,.2f}   best {max(pnl):>10,.2f}")
     ns = [r[1] for r in rows]
     print(f"  short contracts per 1 long: median {statistics.median(ns):.0f}, max {max(ns)}")
+    sc = [r[3] for r in rows]
+    if max(sc) > 1:
+        print(f"  size multiple applied     : median {statistics.median(sc):.0f}x, max {max(sc)}x")
+    ml = [r[2] for r in rows]
+    print(f"  max loss per trade        : median ${statistics.median(ml):,.0f}, "
+          f"cap ${cap:,.0f}")
 
 
 def main() -> int:
@@ -145,12 +178,17 @@ def main() -> int:
     ap.add_argument("--max-positions", type=int, default=5)
     ap.add_argument("--coverage", type=float, default=15.0)
     ap.add_argument("--min-leg", type=float, default=0.03)
-    ap.add_argument("--sizing", default="weighted", choices=("weighted", "unit"),
-                    help="weighted = the study's integer-rounded weights; "
-                         "unit = 1:1, what the broker permits")
+    ap.add_argument("--max-scale", type=int, default=10,
+                    help="liquidity ceiling for --sizing scaled (default 10)")
+    ap.add_argument("--sizing", default="weighted",
+                    choices=("weighted", "unit", "scaled"),
+                    help="weighted = study ratio rounded to integers; "
+                         "unit = 1:1 single contract (what was traded); "
+                         "scaled = 1:1 multiplied up to the risk cap")
     a = ap.parse_args()
-    global SIZING
+    global SIZING, MAX_SCALE
     SIZING = a.sizing
+    MAX_SCALE = a.max_scale
     run(a.underlying, a.day, a.equity, a.max_loss_pct, a.max_positions,
         a.coverage, a.min_leg)
     return 0

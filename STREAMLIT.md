@@ -245,6 +245,78 @@ committed narrations avoid all of that.
 
 ---
 
+## 4c. Why the quantities are 1:1 — put this in the app
+
+Two different constraints get confused here. **One is a hard broker prohibition;
+the other was our own limitation.** A dashboard page explaining this is one of
+the more interesting things the project has to say.
+
+### The RATIO is forbidden
+
+The study sizes each leg by the *opposing* contract's price. Table 5.1: the
+T1 denomination goes **long `C(K2,T2)` shares of A** and **short `C(K̃1,T2)`
+shares of D**.
+
+Because the ordering condition forces `K̃1 < K2`, contract C is the lower strike
+at T2 and is therefore **always dearer than B**. So the short quantity always
+exceeds the long quantity. Measured across 668 real SPY candidates on
+2026-09-03: **ratio from 1.03 to 33.77, median 1.74, not one at or below 1.0.**
+
+Short more than long means selling calls you do not own — **naked**. The account
+is Alpaca **options level 3**, which permits spreads only. Submitting the real
+thing returns:
+
+```
+long 1 : short 2  ->  HTTP 403, code 40310000
+                      "account not eligible to trade uncovered option contracts"
+```
+
+No rescaling escapes it: a ratio above 1 stays above 1 at 2:3, 4:6 or any
+multiple. **1:1 is not the nearest covered approximation — it is the only one.**
+
+Both denominations the study finds profitable, T1 and K2, are short-heavy. The
+two that *are* coverable, T2 and K1, are the two the study reports produce
+negative average profits. **There is no configuration that is both profitable and
+legal at level 3.** Options level 4 is the only route, and that is an Alpaca
+approval, not a code change.
+
+### The SIZE was never forbidden — and we under-used it
+
+Trading 10 long against 10 short is still 1:1, still covered, still level-3
+legal. Nothing stopped it except our own sizing code, which always returned one
+contract.
+
+The cost was large. Across 433 orders the **median max loss per trade was $4**
+against a **$2,500 risk cap** — about 1/625th of the budget available. On the
+same signals and the same filters:
+
+| sizing | trades | total P&L | median max loss |
+|---|---|---|---|
+| unit 1:1 (what was traded) | 672 | +$8,498 | $2 |
+| study weights, integer-rounded | 386 | +$6,049 | $700 |
+| **1:1 scaled 10x** | 672 | **+$35,293** | $20 |
+
+The honest ceiling is **liquidity, not risk**: these are penny options quoting
+one or two lots, so a 600-contract fill is not real even though the risk budget
+allows it. The 10x figure uses a deliberate liquidity ceiling
+(`--max-scale`), and even then sits at 1/125th of the cap.
+
+**The summary worth displaying:** the broker forbade the *shape* of the study's
+position, not its *size*. The shape could not be traded at all; the size could
+have been perhaps ten times larger and was not.
+
+Reproduce with:
+```
+python3 scripts/backtest_weighted.py --underlying SPY --sizing unit
+python3 scripts/backtest_weighted.py --underlying SPY --sizing weighted
+python3 scripts/backtest_weighted.py --underlying SPY --sizing scaled --max-scale 10
+```
+All three prices every surviving episode at quoted prices and assumes it filled.
+Live, 17 orders filled for about **-$28**. That gap between backtest and account
+is a result in itself and should be shown next to these numbers.
+
+---
+
 ## 5. Suggested pages
 
 1. **Overview** — equity, realised P&L, positions open, round-trips today, win
