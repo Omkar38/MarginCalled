@@ -158,8 +158,58 @@ fit, put a single slide with the four contracts A, B, C, D and the inequality on
 screen for the first 20 seconds of that block, then cut to `How it works` for the
 rest.
 
-The simplest way to hit these marks: generate the audio first, play it back while
-you record, and change page when you hear the next paragraph start.
+### Hitting the marks
+
+**Easiest: record each page separately.** `narration_parts/` holds one clip per
+block, already generated:
+
+```
+01_Overview             14s      06_Backtest              27s
+02_How_it_works         34s      07_Why_only_SPY          39s
+03_Reversion            18s      08_Decisions_Narration   20s
+04_Live_fills           22s      09_Signals_close         20s
+05_Live_fills_spread    31s      ------------------------------
+                                 total                  3:45
+```
+
+Record one page at a time while its clip plays, then join them:
+
+```bash
+# regenerate the clips if you edit the script
+for f in narration_parts/*.txt; do
+  say -v Samantha -r 175 -f "$f" -o "${f%.txt}.aiff"
+done
+
+# after recording page_01.mov ... page_09.mov, mux each with its clip
+for i in 01 02 03 04 05 06 07 08 09; do
+  clip=$(ls narration_parts/${i}_*.aiff)
+  ffmpeg -y -i page_${i}.mov -i "$clip" -c:v libx264 -crf 20 \
+         -c:a aac -shortest part_${i}.mp4
+done
+
+printf "file '%s'\n" part_*.mp4 > parts.txt
+ffmpeg -y -f concat -safe 0 -i parts.txt -c copy demo.mp4
+```
+
+A fumbled take costs twenty seconds, not the whole video.
+
+**Alternative: one continuous take.** Play the full `narration.aiff` through
+headphones while recording and change page when you hear the next paragraph
+begin. The audio is the metronome — no counting.
+
+**If you want a timer on screen anyway:**
+
+- **Menu-bar seconds** — System Settings -> Control Center -> Clock -> Show
+  Seconds. Visible in the recording, which is fine if you crop to the browser
+  window instead of the full screen.
+- **QuickTime** shows elapsed recording time in the menu bar while recording:
+  QuickTime Player -> File -> New Screen Recording. `Cmd+Shift+5` does not.
+- **A terminal stopwatch** beside the browser, if you are recording a selected
+  region that excludes it:
+
+  ```bash
+  s=0; while true; do printf "\r  %02d:%02d" $((s/60)) $((s%60)); sleep 1; s=$((s+1)); done
+  ```
 
 ### 2. Generate the voice
 

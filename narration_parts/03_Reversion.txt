@@ -1,0 +1,1 @@
+Over the competition the agent scanned a hundred and ninety two million rectangles, detected seventeen thousand violations, and tracked forty three thousand episodes to resolution. Ninety eight percent of them reverted. Median time, eleven minutes. That is the central claim of the strategy, and it held.

@@ -48,3 +48,5 @@ reports/*
 *.m4a
 *.mov
 *.mp4
+!narration_parts/*.txt
+narration_parts/*.aiff

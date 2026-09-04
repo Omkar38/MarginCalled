@@ -1,0 +1,1 @@
+The signal is real and reverts on schedule. The theoretical position sizing is unusable in practice. And the binding constraint on a live account is the spread, not the mathematics. An end-of-day research paper cannot discover any of that, because mid prices aren't tradeable and margin doesn't exist in a backtest. It only appears when the strategy meets a real broker.

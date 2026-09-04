@@ -1,0 +1,1 @@
+The agent logs every decision, not just the ones that became trades. Thirty two thousand of them, with the quotes, the determinant, and every risk gate that ran. An LLM layer reads that log and writes a plain English account of what the agent did and why it refused what it refused — and it's a reader, not a participant. It has no tools and cannot place an order.

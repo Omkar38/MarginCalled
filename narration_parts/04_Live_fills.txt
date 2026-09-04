@@ -1,0 +1,1 @@
+Live, on a hundred thousand dollar Alpaca paper account, it placed a hundred and thirty one orders through the MCP server. Forty filled. Twenty one completed round trips — and every single one closed because its violation reverted. Not one closed on a time stop or a deadline. The final equity was ninety nine thousand nine hundred and sixty three dollars. A loss of thirty seven.
