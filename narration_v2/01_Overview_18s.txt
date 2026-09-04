@@ -1,0 +1,1 @@
+MarginCalled is an autonomous options trading agent. It does not predict where the market is going. It hunts for prices that are internally inconsistent — arrangements that cannot all be correct at once — and trades until the inconsistency resolves. A hundred and ninety two million rectangles scanned. Seventeen thousand violations found. Ninety eight percent of them reverted.
