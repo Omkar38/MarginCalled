@@ -158,7 +158,28 @@ fit, put a single slide with the four contracts A, B, C, D and the inequality on
 screen for the first 20 seconds of that block, then cut to `How it works` for the
 rest.
 
-### Hitting the marks
+### Recording freely, and fitting the narration afterwards
+
+You do not have to hit the marks. Record at whatever pace feels natural, then
+have the narration re-cut to what you actually did.
+
+```bash
+python3 scripts/analyse_recording.py demo.mov --every 5
+```
+
+It reports duration, resolution, whether it is 16:9, whether it is under the five
+minute limit, and extracts one frame every five seconds into `frames/`, each
+named by its timestamp. Those frames can then be read to see which dashboard page
+is on screen at each moment, and the narration re-timed to match.
+
+**What this can and cannot do.** Video cannot be watched or listened to; frames
+can be read as images. So the page you were on at 0:42 is recoverable, the mouse
+movement between pages is not. Sampling every 5s is plenty for a nine-page
+walkthrough; use `--every 2` if you changed pages quickly.
+
+Record **silently** either way - the narration is always added afterwards.
+
+### Hitting the marks (if you prefer to)
 
 **Easiest: record each page separately.** `narration_parts/` holds one clip per
 block, already generated:
