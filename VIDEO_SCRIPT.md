@@ -12,14 +12,14 @@ while that paragraph is read.
 
 ---
 
-**[SHOW: the Streamlit dashboard, Overview page]**
+**[SHOW: page `Overview` — 13s]**
 
 > MarginCalled is an autonomous options trading agent. It doesn't predict where
 > the market is going. It looks for prices that are internally inconsistent —
 > arrangements that cannot all be correct at once — and trades until the
 > inconsistency resolves.
 
-**[SHOW: the TP2 inequality, or a slide with the four contracts A B C D]**
+**[SHOW: page `How it works` — 36s. Longest block; scroll the funnel slowly]**
 
 > The property it exploits is called total positivity of order two. For any two
 > expiries and two strikes, the product of one pair of call prices must be at
@@ -32,7 +32,7 @@ while that paragraph is read.
 > a violation isn't a signal that something is mispriced relative to a model —
 > it's proof the prices cannot all be right.
 
-**[SHOW: dashboard, Episodes page — the reversion histogram]**
+**[SHOW: page `Reversion` — 16s. The time-to-revert histogram]**
 
 > Over the competition the agent scanned a hundred and ninety two million
 > rectangles, detected seventeen thousand violations, and tracked forty three
@@ -42,7 +42,7 @@ while that paragraph is read.
 >
 > That is the central claim of the strategy, and it held.
 
-**[SHOW: dashboard, Trades page — the 21 round trips]**
+**[SHOW: page `Live fills` — 23s. The round-trip table]**
 
 > Live, on a hundred thousand dollar Alpaca paper account, it placed a hundred
 > and thirty one orders through the MCP server. Forty filled. Twenty one
@@ -52,7 +52,7 @@ while that paragraph is read.
 > The final equity was ninety nine thousand nine hundred and sixty three
 > dollars. A loss of thirty seven.
 
-**[SHOW: dashboard, the spread-versus-edge comparison]**
+**[SHOW: page `Live fills`, scroll to the spread-vs-edge panel — 35s]**
 
 > So the mechanism worked perfectly and the account still lost money. That gap
 > is the most useful thing this project found, and the reason is exact.
@@ -65,7 +65,7 @@ while that paragraph is read.
 > better than we asked. It's market structure: you buy at the ask, sell at the
 > bid, and the difference is what a market maker earns.
 
-**[SHOW: dashboard, Backtest page — the sizing table]**
+**[SHOW: page `Backtest` — 28s. The six-row sizing table]**
 
 > Backtesting the same signals through the same filters shows the strategy is
 > profitable on paper. The T-one denomination returns nine thousand eight hundred
@@ -77,7 +77,7 @@ while that paragraph is read.
 > market moves toward it, which means the fills you get are the ones already
 > going against you.
 
-**[SHOW: dashboard, the margin comparison]**
+**[SHOW: page `Why only SPY` — 39s. Longest block; let the margin table sit]**
 
 > One more finding worth the competition's attention. The research paper sizes
 > each leg by the opposing contract's price. That position is always short-heavy,
@@ -92,7 +92,7 @@ while that paragraph is read.
 > The broker restriction pushed us into the structure that is two thousand times
 > more capital efficient, and bounded the risk instead of leaving it unlimited.
 
-**[SHOW: dashboard, Decisions page — the refusals]**
+**[SHOW: page `Decisions`, then `Narration` — 24s. Split ~12s each]**
 
 > The agent logs every decision, not just the ones that became trades. Thirty two
 > thousand of them, with the quotes, the determinant, and every risk gate that
@@ -100,7 +100,7 @@ while that paragraph is read.
 > agent did and why it refused what it refused — and it's a reader, not a
 > participant. It has no tools and cannot place an order.
 
-**[SHOW: the repository, or the report PDF]**
+**[SHOW: page `Signals`, then the repo or PROJECT_REPORT.pdf — 21s]**
 
 > The signal is real and reverts on schedule. The theoretical position sizing is
 > unusable in practice. And the binding constraint on a live account is the
@@ -128,8 +128,38 @@ Start the dashboard first so you can click through it while recording:
 streamlit run app.py
 ```
 
-Record **silently** — narration is added afterwards. Move deliberately; give each
-page 20–30 seconds.
+Record **silently** — narration is added afterwards.
+
+**Do not give every page equal time.** The blocks are not equal length. Use this
+cue sheet; the seconds are measured from the actual narration audio at 175 wpm:
+
+| # | page | hold | cum. | what is on screen | script says |
+|---|---|---|---|---|---|
+| 1 | `Overview` | 13s | 0:13 | Rectangles scanned, Violations found, Episodes reverted, "The one-line story" | what the agent is |
+| 2 | `How it works` | 36s | 0:49 | "From a quote to a trade — or, far more often, a refusal" + the numbered pipeline | the TP2 inequality and why it is not a model |
+| 3 | `Reversion` | 16s | 1:05 | Episodes tracked, Median time to revert, "How long a violation lasts" histogram | **98% reverted, median 11 min** — matches exactly |
+| 4 | `Live fills` (top) | 23s | 1:28 | Orders placed, "What actually filled" table | 131 placed, 40 filled, 21 round trips |
+| 5 | `Live fills` (scroll) | 35s | 2:03 | **"The edge and the cost are the same size"** | the 2c vs 2c explanation — matches exactly |
+| 6 | `Backtest` | 28s | 2:31 | T1 unit / scaled / K2 rows, "Median T1 trade" | the backtest numbers and the 3% fill caveat |
+| 7 | `Why only SPY` | 39s | 3:10 | "Why only SPY ever traded", "three things kept the book tiny" | naked calls, Reg T margin, 2,220x capital efficiency |
+| 8 | `Decisions` → `Narration` | 24s | 3:34 | "Two real refusals, straight from the log"; then "The agent's own account of the run" | the audit log and the LLM reader |
+| 9 | `Signals` → repo / PDF | 21s | 3:55 | "What gets dropped before a violation is even scored" funnel | the three closing findings |
+
+**Total 3:55.** Nine blocks, nine pages — but not one-to-one: `Live fills` carries
+blocks 4 and 5, and blocks 8 and 9 each cover two screens.
+
+**Where the fit is tightest** — blocks 3, 5, 6 and 7 land on pages built to say
+the same thing, so the narration and the screen reinforce each other. Let those
+sit.
+
+**Where it is loosest** — block 2 explains the *mathematics* while `How it works`
+shows the *pipeline*. They complement rather than mirror. If you want a tighter
+fit, put a single slide with the four contracts A, B, C, D and the inequality on
+screen for the first 20 seconds of that block, then cut to `How it works` for the
+rest.
+
+The simplest way to hit these marks: generate the audio first, play it back while
+you record, and change page when you hear the next paragraph start.
 
 ### 2. Generate the voice
 
