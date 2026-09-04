@@ -42,3 +42,9 @@ reports/*
 
 # Streamlit secrets — never commit
 .streamlit/secrets.toml
+
+# Video production artefacts - large binaries, regenerable from VIDEO_SCRIPT.md
+*.aiff
+*.m4a
+*.mov
+*.mp4
