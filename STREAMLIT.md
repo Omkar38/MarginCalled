@@ -317,6 +317,58 @@ is a result in itself and should be shown next to these numbers.
 
 ---
 
+## 4d. Why the live account lost money — the most important page
+
+The backtest returns about **+$2 per trade**. The live account returned about
+**-$2 per round trip**. Same strategy, same day, same signals. The reason is not
+the sizing and not the 1:1 constraint.
+
+**The edge and the cost of capturing it are the same size.**
+
+```
+SPY leg spreads, 5,786 observations on 2026-09-03
+   A leg median  $0.010
+   D leg median  $0.010
+   crossing both legs, in and out:  $0.020/share = $2 per contract
+
+backtest median profit per trade   +$2
+live median loss per round trip    -$2
+```
+
+A ~2-cent inefficiency really is there — 21 of 21 live positions closed because
+the violation **reverted**, exactly as the thesis predicts. But it costs ~2 cents
+to cross the spread twice to collect it, so execution decides the sign.
+
+Live lands on the wrong side of that coin flip for a structural reason:
+
+- The backtest assumes a fill at the quoted price on **all 672** signals. The
+  live agent filled **21** — about 3%.
+- A limit buy only fills when the market comes **down** to it. The fills you get
+  are therefore the ones where the trade was already moving against you. That is
+  adverse selection, and it is not a bug: it is what a resting limit order is.
+
+**A caution about the scaled figure in section 4c.** The "+$35,293 at 10x" number
+inherits the backtest's +$2 per trade. Scaling multiplies whatever the true
+per-contract result is - if that is really -$2, then 10x is **-$20 a trade, not
++$45**. Size amplifies a sign; it does not create one. Show the scaled row only
+alongside the live result, never on its own.
+
+**What would actually change the outcome**, in order of honesty:
+
+1. **Tighter spreads.** The edge is fixed at a couple of cents; the cost is not.
+   OPRA data and more liquid strikes would shrink the denominator.
+2. **Passive entry.** Resting inside the spread rather than crossing it turns a
+   2-cent cost into something smaller, at the price of fewer fills.
+3. **Not this instrument.** On penny options a one-tick spread is 20-30% of the
+   contract's value. The same strategy on contracts worth dollars rather than
+   cents faces a far smaller proportional cost.
+
+This is the honest headline of the project: **the signal is real and the
+execution cost eats it.** That is a more useful result than a backtest number,
+and it is the thing worth putting in front of a judge.
+
+---
+
 ## 5. Suggested pages
 
 1. **Overview** — equity, realised P&L, positions open, round-trips today, win

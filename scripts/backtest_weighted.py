@@ -77,10 +77,21 @@ def run(underlying: str, day: str, equity: float, max_loss_pct: float,
             continue
 
         obs = paths.get(ep["episode_id"]) or []
-        entry = next((r for r in obs if r.get("violating") in ("True", "true", "1")), None)
-        exit_ = next((r for r in reversed(obs)
-                      if r.get("violating") in ("False", "false", "0")
-                      and r.get("observable") in ("True", "true", "1")), None)
+        # Exit at the FIRST reversion after entry, never the last observation.
+        #
+        # This previously scanned reversed(obs), taking the last non-violating
+        # row in the whole path - a look-ahead. It exited at whatever price
+        # happened to be best hours later, and reported a profit where the live
+        # account lost money on the same episodes. The agent cannot see the
+        # future; it closes on the first reversion its tracker confirms.
+        entry_i = next((i for i, r in enumerate(obs)
+                        if r.get("violating") in ("True", "true", "1")), None)
+        entry = obs[entry_i] if entry_i is not None else None
+        exit_ = None
+        if entry_i is not None:
+            exit_ = next((r for r in obs[entry_i + 1:]
+                          if r.get("violating") in ("False", "false", "0")
+                          and r.get("observable") in ("True", "true", "1")), None)
         if entry is None or exit_ is None:
             rejected["no entry/exit quote"] += 1
             continue
