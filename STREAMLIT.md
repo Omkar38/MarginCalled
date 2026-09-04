@@ -420,6 +420,50 @@ them, which is why the results appear as two tables rather than one.
 
 ---
 
+## 4f. Could the paper's ratio be traded at another broker?
+
+Yes. **1 long x 2 short is a ratio spread** - a standard, widely traded
+structure. Nothing about it is impossible; Alpaca refuses it only because this
+account is options level 3. Level 4, or an equivalent tier elsewhere, permits it.
+
+**But the margin makes it pointless.** The uncovered contract is a naked short
+call, and Reg T requires
+
+```
+premium + max(20% x underlying - out-of-money amount, 10% x underlying)
+```
+
+which on these contracts is:
+
+| contract | OTM by | margin per naked contract |
+|---|---|---|
+| SPY 790 call | 17 | **$13,765** |
+| SPY 797 call | 24 | $13,062 |
+| SPY 806 call | 33 | $12,161 |
+
+Our trades wanted a median of two shorts per long, so one naked contract each.
+Comparing return on the capital actually committed, on the same signals:
+
+| structure | capital tied up | mean profit | return on capital |
+|---|---|---|---|
+| **covered 1:1** (traded) | **$4** | $14.63 | **365.8%** |
+| 1x2 ratio (paper weights) | $13,765 | $22.68 | **0.165%** |
+
+**The covered version earns about 2,220x more per dollar committed**, and its
+risk is bounded at the debit while the ratio spread's is unlimited above the
+short strike.
+
+**Why the paper does not see this.** GLP measure profit *per trade*, never profit
+*per dollar of margin*. They hold fractional positions to expiration and model no
+margin at all - the constraint simply does not exist in their framework. It is
+the first thing that bites when the strategy meets a real account.
+
+**The conclusion worth displaying:** the broker restriction cost nothing. It
+forced the structure that is both far more capital-efficient and far less risky.
+The thing that actually cost money was the bid-ask spread (section 4d).
+
+---
+
 ## 5. Suggested pages
 
 1. **Overview** — equity, realised P&L, positions open, round-trips today, win
