@@ -186,7 +186,18 @@ def run(underlying: str, day: str, equity: float, max_loss_pct: float,
     print(f"  short contracts per 1 long: median {statistics.median(ns):.0f}, max {max(ns)}")
     sc = [r[3] for r in rows]
     if max(sc) > 1:
-        print(f"  size multiple applied     : median {statistics.median(sc):.0f}x, max {max(sc)}x")
+        # Report the EFFECTIVE multiple, not the median scale.
+        #
+        # Scale is cap // max_loss and max_loss is the debit, so a trade with a
+        # large debit has both a bigger potential P&L and a smaller permitted
+        # scale. The multiple lands hardest on the trades that contribute least:
+        # trades over $50 took a median 1x while those under took 10x. Quoting
+        # "median 10x" beside a 3x gain is true and misleading at once.
+        unscaled = sum(r[0] / r[3] for r in rows if r[3])
+        eff = (sum(pnl) / unscaled) if unscaled else 1.0
+        print(f"  size multiple             : median {statistics.median(sc):.0f}x applied, "
+              f"but {eff:.1f}x effective on P&L")
+        print(f"     (scale is capped by max loss, so the largest trades scale least)")
     ml = [r[2] for r in rows]
     print(f"  max loss per trade        : median ${statistics.median(ml):,.0f}, "
           f"cap ${cap:,.0f}")

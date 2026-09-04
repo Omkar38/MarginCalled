@@ -491,10 +491,18 @@ derivations.
 |---|---|---|---|---|---|---|
 | **T1** | unit 1:1 | 672 | **+$9,829** | +$14.63 | +$2.00 | 67% |
 | **T1** | paper weights | 386 | **+$8,754** | +$22.68 | +$1.00 | 65% |
-| **T1** | 1:1 scaled 10x | 672 | **+$30,878** | +$45.95 | +$3.00 | 67% |
+| **T1** | 1:1 scaled (10x cap, **3.1x effective**) | 672 | **+$30,878** | +$45.95 | +$3.00 | 67% |
 | **K2** | unit 1:1 | 748 | **-$5,363** | -$7.17 | $0.00 | 49% |
 | **K2** | paper weights | 312 | **-$5,775** | -$18.51 | -$1.00 | 43% |
-| **K2** | 1:1 scaled 10x | 748 | **-$84,249** | -$112.63 | $0.00 | 49% |
+| **K2** | 1:1 scaled (10x cap) | 748 | **-$84,249** | -$112.63 | $0.00 | 49% |
+
+**On the scaled row.** The 10x is a *cap*, not the multiple achieved. Scale is
+`cap / max_loss` and max_loss is the debit, so a trade with a large debit has a
+bigger potential P&L *and* a smaller permitted scale. Trades over $50 took a
+median **1x**; those under took **10x**. The multiple lands on the trades that
+contribute least, so the effective gain is **3.1x, not 10x**. Quoting "median
+10x" beside a 3x total is true and misleading at the same time - report the
+effective figure.
 
 **Never show a backtest row without the live result beside it.** All six assume a
 fill on every signal; 3% actually filled, for **-$45** realised.

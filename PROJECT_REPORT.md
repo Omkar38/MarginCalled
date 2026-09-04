@@ -261,10 +261,10 @@ reversion *after* entry.
 |---|---|---|---|---|---|---|
 | **T1** | unit 1:1 | 672 | **+\$9,829** | +\$14.63 | +\$2.00 | 67% |
 | **T1** | paper weights | 386 | **+\$8,754** | +\$22.68 | +\$1.00 | 65% |
-| **T1** | 1:1 scaled 10× | 672 | **+\$30,878** | +\$45.95 | +\$3.00 | 67% |
+| **T1** | 1:1 scaled (10x cap, **3.1x effective**) | 672 | **+\$30,878** | +\$45.95 | +\$3.00 | 67% |
 | **K2** | unit 1:1 | 748 | −\$5,363 | −\$7.17 | \$0.00 | 49% |
 | **K2** | paper weights | 312 | −\$5,775 | −\$18.51 | −\$1.00 | 43% |
-| **K2** | 1:1 scaled 10× | 748 | −\$84,249 | −\$112.63 | \$0.00 | 49% |
+| **K2** | 1:1 scaled (10x cap) | 748 | -\$84,249 | -\$112.63 | \$0.00 | 49% |
 
 **T1 is profitable; K2 is not** — though the source study reports both performing
 well. The most likely cause is the exit: the study **holds every position to
