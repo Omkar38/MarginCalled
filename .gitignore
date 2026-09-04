@@ -38,3 +38,6 @@ reports/*
 # built elsewhere from the repository alone, so its data has to travel with it.
 # data/ itself stays ignored - it is live, large and changes every scan.
 !dashboard_data/
+
+# Streamlit secrets — never commit
+.streamlit/secrets.toml
