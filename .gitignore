@@ -32,6 +32,7 @@ reports/*
 !reports/COMPLIANCE.md
 !reports/*_narration.md
 !reports/BACKTEST_SIZING.md
+!reports/PROJECT_REPORT.pdf
 .DS_Store
 
 # Compressed snapshot of the scan output, committed on purpose: the dashboard is
