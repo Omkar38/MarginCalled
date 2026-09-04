@@ -289,7 +289,39 @@ becomes width-scaled — median **\$700**, a 350× increase in measured risk. Th
 weighted version is not finding fewer signals; it is being **refused by the risk
 manager**, correctly.
 
-## 5.3 The caveat that governs all of these
+## 5.3 Reading the scaled row correctly
+
+The scaled row applies a **10x cap**, and 630 of 748 trades received the full 10x
+— so the *median* multiple really is 10x. The total nevertheless grows only
+**3.1x**, and the reason is worth stating because it is easy to misread.
+
+Scale is `risk cap / max loss`, and max loss is the debit. A trade with a large
+debit therefore has **more profit potential and less room to scale at the same
+time.** The multiple lands hardest on the trades that matter least:
+
+| | count | median scale |
+|---|---|---|
+| trades earning **>= \$50** | 106 | **1x** |
+| trades earning **< \$50** | 642 | **10x** |
+
+**Most trades got 10x; most profit got 1x.** Quoting "median 10x applied" beside a
+3.1x total is true twice over and misleading once — the median counts trades, and
+every trade counts equally regardless of size, so it describes the typical
+*trade* and says nothing about the typical *dollar*.
+
+Two consequences follow:
+
+- The honest figure is the **effective** multiple, 3.1x, and the tool now prints
+  both with the reason they differ.
+- The risk manager is behaving correctly. It caps precisely the positions that
+  are already large, which is what a risk cap is for. Scaling is not a free lever.
+
+And the caveat from §7 still governs: scaling multiplies whatever the true
+per-contract result is. If that is really **-\$2** as the live account says rather
+than **+\$2** as the backtest assumes, then scaling makes the outcome worse, not
+better. **Size amplifies a sign; it does not create one.**
+
+## 5.4 The caveat that governs all of these
 
 **Every row assumes a fill at the quoted price on every signal.** Live, 3% filled.
 The gap between +\$9,829 and −\$45 is not a modelling error — **it is the
