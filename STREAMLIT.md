@@ -293,7 +293,7 @@ same signals and the same filters:
 | sizing | trades | total P&L | median max loss |
 |---|---|---|---|
 | unit 1:1 (what was traded) | 672 | +$8,498 | $2 |
-| study weights, integer-rounded | 386 | +$6,049 | $700 |
+| paper weights, integer-rounded | 386 | +$6,049 | $700 |
 | **1:1 scaled 10x** | 672 | **+$35,293** | $20 |
 
 The honest ceiling is **liquidity, not risk**: these are penny options quoting
@@ -358,9 +358,9 @@ short leg the nearest whole number, because a market cannot sell 1.74 contracts.
 | denomination | sizing | trades | total | mean | median | win |
 |---|---|---|---|---|---|---|
 | **T1** (long A, short D) | unit 1:1 | 672 | **+$9,829** | +$14.63 | +$2.00 | 67% |
-| **T1** | study weights | 386 | **+$8,754** | +$22.68 | +$1.00 | 65% |
+| **T1** | paper weights | 386 | **+$8,754** | +$22.68 | +$1.00 | 65% |
 | **K2** (long B, short D) | unit 1:1 | 748 | **-$5,363** | -$7.17 | $0.00 | 49% |
-| **K2** | study weights | 312 | **-$5,775** | -$18.51 | -$1.00 | 43% |
+| **K2** | paper weights | 312 | **-$5,775** | -$18.51 | -$1.00 | 43% |
 
 Two things to say about this honestly:
 
@@ -377,6 +377,48 @@ Reproduce:
 python3 scripts/backtest_weighted.py --underlying SPY --denom T1 --sizing weighted
 python3 scripts/backtest_weighted.py --underlying SPY --denom K2 --sizing weighted
 ```
+
+## 4e. How T1 or K2 is chosen — it is not, yet
+
+**Terminology.** "Paper weights" throughout this document means the quantities in
+**Table 5.1 of Glasserman, Li & Pirjol**, where each leg's size is the *opposing*
+contract's price:
+
+| denomination | long leg | its quantity | short leg | its quantity |
+|---|---|---|---|---|
+| **T1** | A = $(K_1,T_1)$ | $C(K_2,T_2)$ = **B's price** | D = $(\tilde K_2,T_1)$ | $C(\tilde K_1,T_2)$ = **C's price** |
+| **K2** | B = $(K_2,T_2)$ | $C(K_1,T_1)$ = **A's price** | D = $(\tilde K_2,T_1)$ | $C(\tilde K_1,T_2)$ = **C's price** |
+
+### The selection is built but inert
+
+`run_scanner.py` line 217 calls `structure_for(underlying)` **once**, at startup,
+and every trade thereafter uses that one value. There is no per-candidate choice.
+
+```
+SPY -> T1   "no model available; defaulting to T1"
+SPX -> T1   "T1 is the only submittable denomination"
+XSP -> T1   "T1 is the only submittable denomination"
+```
+
+- **SPX and XSP:** correct and forced. Both are European and Alpaca rejects a
+  multi-leg order whose legs span expiries (`HTTP 422 / 42210000`), so K2 - a
+  diagonal - cannot be submitted at all. There is nothing to choose between.
+- **SPY:** T1 is a **fallback, not a decision.** SPY is American so both are
+  legal, but no model is loaded.
+
+`ModelDenominationSelector` exists in `src/tp2agent/position.py` and is tested:
+it builds one 46-feature vector **per denomination** (they differ in exactly two
+features - `strategy_selected_mid_sum` and `strategy_selected_mean_spread_pct`),
+scores both, takes the higher, and **abstains** if neither clears 0.5. It is
+never instantiated by the scanner, because the trained model was not supplied.
+
+**Say this plainly in the dashboard.** An agent that reports "no model available;
+defaulting to T1" in its own decision log is being more useful than one that
+implies a choice it never made. The backtest reflects the same limitation:
+`--denom T1` and `--denom K2` are separate runs, not a selector picking between
+them, which is why the results appear as two tables rather than one.
+
+---
 
 ## 5. Suggested pages
 
@@ -401,7 +443,7 @@ python3 scripts/backtest_weighted.py --underlying SPY --denom K2 --sizing weight
 - 17 orders filled, **17 round-trips, every one closed `reverted`**
 - Realised P&L **−$28**; equity ~$99,971 from $100,000
 - Backtest through the same filters: unit 1:1 **640 trades, +$4,702, 66% win**;
-  study weights **293 trades, +$2,587, 58% win** (`reports/BACKTEST_SIZING.md`)
+  paper weights **293 trades, +$2,587, 58% win** (`reports/BACKTEST_SIZING.md`)
 - At a 10% spread screen, **21,109 contracts measured, zero violations** —
   violations on this feed exist only where spreads are wide
 - Alpaca publishes greeks for only **75 of 244** SPY contracts on one expiry
