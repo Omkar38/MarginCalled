@@ -46,6 +46,7 @@ reports/*
 # Video production artefacts - large binaries, regenerable from VIDEO_SCRIPT.md
 *.aiff
 *.m4a
+!reports/audio/**
 !narration_v2/*.txt
 *.mov
 *.mp4

@@ -45,3 +45,38 @@ for f in narration_v2/*.txt; do
 done
 # then re-anchor: see the adelay/amix command in the project history
 ```
+
+---
+
+## Inserting it yourself
+
+The track is already the same length as the video (272s) and starts at zero.
+
+**In any editor** (Premiere, Final Cut, DaVinci, CapCut, iMovie):
+
+1. Import `narration.wav` and drag it to an audio track
+2. Snap its **left edge to 00:00:00** — the very start of the timeline
+3. Do not trim, split or move it. The silences inside it are the alignment.
+4. Export
+
+**With ffmpeg**, one command, no editor:
+
+```bash
+ffmpeg -i your_video.mov -i reports/audio/narration.wav \
+       -c:v copy -c:a aac -b:a 160k -shortest output.mp4
+```
+
+Add `-map 0:v -map 1:a` if your source already has an audio track you want
+replaced rather than mixed.
+
+**Verify the result** — every one of these should report silence, because each is
+a gap between two sections:
+
+```bash
+for t in 17 46 66 121 172 205; do
+  ffmpeg -hide_banner -nostats -ss $t -t 1 -i output.mp4 \
+         -map 0:a -af volumedetect -f null - 2>&1 | grep mean_volume
+done
+```
+
+Anything above -50 dB at those marks means the track has been shifted.
